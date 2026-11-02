@@ -19,6 +19,14 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.squareup.okhttp3:okhttp:5.5.1")
+    // built-in terminal: JediTerm + a real pty
+    implementation("org.jetbrains.jediterm:jediterm-ui:3.76")
+    implementation("org.jetbrains.jediterm:jediterm-core:3.76")
+    implementation("org.jetbrains.pty4j:pty4j:0.13.13")
+    // built-in browser for a quick look at what the agent made: JavaFX WebView
+    listOf("base", "graphics", "controls", "media", "web", "swing").forEach { implementation("org.openjfx:javafx-$it:21.0.13:linux") }
+    // QR code for Remote control (the phone scans it)
+    implementation("com.google.zxing:core:3.5.4")
 }
 
 compose.desktop {
@@ -29,7 +37,7 @@ compose.desktop {
             targetFormats(TargetFormat.AppImage, TargetFormat.Deb)
             packageName = "cl0udly"
             packageVersion = "0.0.1"
-            modules("java.net.http", "jdk.unsupported")
+            modules("java.net.http", "jdk.unsupported", "jdk.jsobject", "java.scripting", "jdk.xml.dom", "jdk.unsupported.desktop")
             linux { iconFile.set(project.file("src/main/resources/icon.png")) }
         }
     }

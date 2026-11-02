@@ -28,7 +28,10 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.DropdownMenu
+import app.cl0udly.ui.kit.Pop
+import app.cl0udly.ui.kit.PopItem
+import app.cl0udly.ui.kit.Side
+import app.cl0udly.ui.kit.PopDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,41 +66,51 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
-fun Menu(open: Boolean, onDismiss: () -> Unit, content: @Composable () -> Unit) {
-    val c = Oc.c
-    DropdownMenu(
-        open, onDismiss,
-        modifier = Modifier.background(c.surface).border(1.dp, c.border, Oc.round(12.dp)).padding(horizontal = 6.dp),
-        shape = Oc.round(12.dp), containerColor = c.surface, shadowElevation = 6.dp, tonalElevation = 0.dp,
-    ) { Column(Modifier.widthIn(min = 220.dp)) { content() } }
-}
+fun Menu(open: Boolean, onDismiss: () -> Unit, side: Side = Side.Below, content: @Composable () -> Unit) = Pop(open, onDismiss, side) { content() }
 
 @Composable
-fun MenuItem(ic: Ic?, label: String, hint: String? = null, danger: Boolean = false, checked: Boolean = false, onClick: () -> Unit) {
-    val c = Oc.c
-    val col = if (danger) c.danger else c.text
-    Row(
-        Modifier.fillMaxWidth().height(38.dp).hoverTap(Oc.round(8.dp), onClick = onClick).padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (ic != null) { Icon(ic, 17.dp, col); Spacer(Modifier.width(12.dp)) }
-        Txt(label, size = 15.sp, color = col, modifier = Modifier.weight(1f), maxLines = 1)
-        if (hint != null) Txt(hint, size = 13.sp, color = c.textDim, family = Oc.mono)
-        if (checked) Icon(Ic.Check, 16.dp, c.accent)
-    }
-}
+fun MenuItem(ic: Ic?, label: String, hint: String? = null, danger: Boolean = false, checked: Boolean = false, onClick: () -> Unit) =
+    PopItem(label, ic, hint = hint, danger = danger, checked = checked, onClick = onClick)
 
-/** The ☰ menu: what Claude desktop puts in its app menu. */
+/** The ☰ menu: Claude desktop's menu bar (File, Edit, View, Go, Help) folded into one button. */
 @Composable
 fun AppMenu(open: Boolean, onDismiss: () -> Unit) {
-    Menu(open, onDismiss) {
-        MenuItem(Ic.Plus, "New chat", "Ctrl+N") { onDismiss(); Graph.prefs.mode = "chat"; Nav.go(Screen.Home) }
-        MenuItem(Ic.Code, "New session in a folder", "Ctrl+O") { onDismiss(); pickProject() }
-        MenuItem(Ic.Search, "Search", "Ctrl+K") { onDismiss(); Nav.search = true }
-        MenuItem(Ic.Cloud, "Quick entry", "Ctrl+Shift+Space") { onDismiss(); Nav.quick = true }
-        MenuItem(Ic.Sidebar, "Toggle sidebar", "Ctrl+B") { onDismiss(); Graph.prefs.sidebarOpen = !Graph.prefs.sidebarOpen }
-        MenuItem(Ic.Settings, "Settings", "Ctrl+,") { onDismiss(); Nav.go(Screen.Settings()) }
-        MenuItem(Ic.Info, "About cl0udly") { onDismiss(); Nav.go(Screen.Settings("about")) }
+    val p = Graph.prefs
+    Pop(open, onDismiss, minWidth = 140.dp) {
+        PopItem("File", submenu = { close ->
+            PopItem("New chat", Ic.Plus, hint = "Ctrl+N") { close(); onDismiss(); p.mode = "chat"; Nav.go(Screen.Home) }
+            PopItem("Open folder…", Ic.Folder, hint = "Ctrl+O") { close(); onDismiss(); pickProject() }
+            PopItem("Open file…", Ic.File, hint = "Ctrl+Shift+O") { close(); onDismiss(); Pickers.openFile() }
+            PopDivider()
+            PopItem("Settings", Ic.Settings, hint = "Ctrl+,") { close(); onDismiss(); Nav.settings = "general" }
+            PopDivider()
+            PopItem("Quit", hint = "Ctrl+Q") { close(); onDismiss(); Nav.quit() }
+        })
+        PopItem("View", submenu = { close ->
+            PopItem("Sidebar", Ic.Sidebar, hint = "Ctrl+B", checked = p.sidebarOpen) { close(); onDismiss(); p.sidebarOpen = !p.sidebarOpen }
+            PopItem("Context", Ic.Info, hint = "Ctrl+I", checked = Nav.pane == "context") { close(); onDismiss(); Nav.toggle("context") }
+            PopItem("Terminal", Ic.Terminal, hint = "Ctrl+`", checked = Nav.pane == "terminal") { close(); onDismiss(); Nav.toggle("terminal") }
+            PopItem("Changes", Ic.Diff, hint = "Ctrl+Shift+D", checked = Nav.pane == "diff") { close(); onDismiss(); Nav.toggle("diff") }
+            PopItem("Browser", Ic.Globe, hint = "Ctrl+Shift+B", checked = Nav.pane == "browser") { close(); onDismiss(); Nav.toggle("browser") }
+            PopItem("Files", Ic.Folder, hint = "Ctrl+Shift+E", checked = Nav.pane == "files") { close(); onDismiss(); Nav.toggle("files") }
+            PopDivider()
+            PopItem("Bigger text", hint = "Ctrl+=") { close(); onDismiss(); p.textSize = if (p.textSize == "small") "default" else "large" }
+            PopItem("Smaller text", hint = "Ctrl+-") { close(); onDismiss(); p.textSize = if (p.textSize == "large") "default" else "small" }
+        })
+        PopItem("Go", submenu = { close ->
+            PopItem("Back", Ic.Back, hint = "Ctrl+[", enabled = Nav.canBack) { close(); onDismiss(); Nav.back() }
+            PopItem("Forward", Ic.Forward, hint = "Ctrl+]", enabled = Nav.canForward) { close(); onDismiss(); Nav.forward() }
+            PopItem("Search", Ic.Search, hint = "Ctrl+K") { close(); onDismiss(); Nav.search = true }
+            PopItem("Quick entry", Ic.Cloud, hint = "Ctrl+Shift+Space") { close(); onDismiss(); Nav.quick = true }
+            PopItem("Projects", Ic.Folder) { close(); onDismiss(); Nav.go(Screen.Projects) }
+            PopItem("Usage", Ic.Gauge) { close(); onDismiss(); Nav.settings = "usage" }
+        })
+        PopItem("Help", submenu = { close ->
+            PopItem("Keyboard shortcuts", Ic.Key) { close(); onDismiss(); Nav.settings = "shortcuts" }
+            PopItem("Server log", Ic.File) { close(); onDismiss(); app.cl0udly.data.Desktop.open(Graph.runtime.logFile.absolutePath) }
+            PopItem("OpenCode docs", Ic.Globe) { close(); onDismiss(); Nav.openUrl("https://opencode.ai/docs") }
+            PopItem("About cl0udly", Ic.Info) { close(); onDismiss(); Nav.settings = "about" }
+        })
     }
 }
 
@@ -109,18 +122,6 @@ fun LookMenu(open: Boolean, onDismiss: () -> Unit) {
         listOf("system" to "Match system", "dark" to "Dark", "light" to "Light").forEach { (id, t) ->
             MenuItem(null, t, checked = Graph.prefs.colorMode == id) { Graph.prefs.colorMode = id; onDismiss() }
         }
-    }
-}
-
-/** A folder for Code: the system's folder picker (Swing on Linux works through XWayland too). */
-fun pickProject() {
-    val ch = javax.swing.JFileChooser(Nav.project ?: System.getProperty("user.home")).apply {
-        fileSelectionMode = javax.swing.JFileChooser.DIRECTORIES_ONLY
-        dialogTitle = "Open a project folder"
-    }
-    if (ch.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) {
-        val d = ch.selectedFile.absolutePath
-        Graph.prefs.addProject(d); Graph.prefs.mode = "code"; Nav.project = d; Nav.go(Screen.Home)
     }
 }
 
@@ -194,13 +195,20 @@ fun SearchOverlay() {
         var q by remember { mutableStateOf("") }
         var sel by remember { mutableIntStateOf(0) }
         val focus = remember { FocusRequester() }
-        val all = Graph.hub.sessions
-        val found = remember(q, all) {
-            if (q.isBlank()) all.take(30) else all.filter { it.displayTitle.contains(q, true) || it.directory.contains(q, true) }.take(30)
+        var tab by remember { mutableStateOf("all") }
+        val all = Graph.hub.sessions.filter { s -> when (tab) { "chats" -> Graph.hub.isChat(s); "code" -> !Graph.hub.isChat(s); else -> true } }
+        val dirs = (Graph.prefs.projectList + Graph.hub.sessions.filter { !Graph.hub.isChat(it) }.map { it.directory }).distinct()
+            .filter { q.isBlank() || it.contains(q, true) }
+        val found = remember(q, all, tab) {
+            if (tab == "projects") emptyList()
+            else if (q.isBlank()) all.take(30) else all.filter { it.displayTitle.contains(q, true) || it.directory.contains(q, true) }.take(30)
         }
         val list = rememberLazyListState()
         LaunchedEffect(sel) { if (found.isNotEmpty()) list.animateScrollToItem(sel.coerceIn(0, found.lastIndex)) }
-        fun open(i: Int) { found.getOrNull(i)?.let { Nav.search = false; Nav.go(Screen.Chat(it.id)) } }
+        fun open(i: Int) {
+            if (tab == "projects") dirs.getOrNull(i)?.let { d -> Nav.search = false; Graph.prefs.mode = "code"; Nav.project = d; Graph.prefs.addProject(d); Nav.go(Screen.Home) }
+            else found.getOrNull(i)?.let { Nav.search = false; Nav.go(Screen.Chat(it.id)) }
+        }
         Column(Modifier.width(640.dp).clip(Oc.round(16.dp)).background(c.surface).border(1.dp, c.border, Oc.round(16.dp))) {
             Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Ic.Search, 18.dp, c.textDim)
@@ -208,7 +216,7 @@ fun SearchOverlay() {
                 Field(q, { q = it; sel = 0 }, "Search chats and sessions", Modifier.weight(1f).focusRequester(focus).onPreviewKeyEvent { e ->
                     if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     when (e.key) {
-                        Key.DirectionDown -> { sel = (sel + 1).coerceAtMost(found.lastIndex.coerceAtLeast(0)); true }
+                        Key.DirectionDown -> { sel = (sel + 1).coerceAtMost((if (tab == "projects") dirs.lastIndex else found.lastIndex).coerceAtLeast(0)); true }
                         Key.DirectionUp -> { sel = (sel - 1).coerceAtLeast(0); true }
                         Key.Enter -> { open(sel); true }
                         Key.Escape -> { Nav.search = false; true }
@@ -216,8 +224,27 @@ fun SearchOverlay() {
                     }
                 })
             }
+            Row(Modifier.padding(horizontal = 12.dp).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf("all" to "All", "chats" to "Chats", "code" to "Code", "projects" to "Projects").forEach { (id, l) ->
+                    Box(Modifier.hoverTap(Oc.round(8.dp), tab == id) { tab = id; sel = 0 }.padding(horizontal = 11.dp, vertical = 5.dp)) {
+                        Txt(l, size = 13.sp, color = if (tab == id) c.text else c.textDim)
+                    }
+                }
+            }
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
             LazyColumn(Modifier.heightIn(max = 420.dp).padding(6.dp), state = list) {
+                if (tab == "projects") itemsIndexed(dirs, key = { _, d -> "d:$d" }) { i, d ->
+                    Row(
+                        Modifier.fillMaxWidth().height(44.dp).hoverTap(Oc.round(10.dp), i == sel) { open(i) }.padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Ic.Folder, 17.dp, c.textDim)
+                        Spacer(Modifier.width(12.dp))
+                        Txt(java.io.File(d).name, size = 15.sp, maxLines = 1)
+                        Spacer(Modifier.width(10.dp))
+                        Txt(d, size = 13.sp, color = c.textDim, maxLines = 1, modifier = Modifier.weight(1f))
+                    }
+                }
                 itemsIndexed(found, key = { _, s -> s.id }) { i, s ->
                     Row(
                         Modifier.fillMaxWidth().height(44.dp).hoverTap(Oc.round(10.dp), i == sel) { open(i) }.padding(horizontal = 12.dp),
@@ -229,7 +256,7 @@ fun SearchOverlay() {
                         Txt(ago(s.time.updated), size = 13.sp, color = c.textDim)
                     }
                 }
-                if (found.isEmpty()) item { Txt("Nothing found", size = 14.sp, color = c.textDim, modifier = Modifier.padding(16.dp)) }
+                if (found.isEmpty() && (tab != "projects" || dirs.isEmpty())) item { Txt("Nothing found", size = 14.sp, color = c.textDim, modifier = Modifier.padding(16.dp)) }
             }
         }
         LaunchedEffect(Unit) { delay(30); runCatching { focus.requestFocus() } }

@@ -322,7 +322,8 @@ fun PixelCloud(modifier: Modifier, thinking: Boolean = false, interactive: Boole
         while (true) {
             delay(if (holiday.ambient != null) holiday.every else 4000)
             tick++
-            holiday.ambient?.let { a -> bit(a, -0.3f + Math.random().toFloat() * 1.6f) }
+            // only beside the cloud: falling across the face they looked like a line over it
+            holiday.ambient?.let { a -> val r = Math.random().toFloat() * 0.3f; bit(a, if (Math.random() < 0.5) -0.38f + r else 1.05f + r) }
             if (mood != CloudMood.Idle) continue
             if (holiday.sneezes && tick % 23 == 0) {
                 mood = CloudMood.Sleep; delay(160); mood = CloudMood.Angry; boing(0.78f)

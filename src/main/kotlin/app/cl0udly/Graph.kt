@@ -21,11 +21,13 @@ object Graph {
     val remote = MutableStateFlow(prefs.remoteUrl)
     val events = EventHub(api, runtime)
     val hub = Hub(api, events, prefs, scope)
+    val usage = app.cl0udly.data.UsageTracker(api, prefs, events)
 
     fun start() {
         if (prefs.remoteUrl.isBlank()) runtime.start()
         events.start(scope)
         hub.start()
+        usage.start()
     }
 
     fun useRemote(url: String, password: String) {

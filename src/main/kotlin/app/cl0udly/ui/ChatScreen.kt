@@ -1,5 +1,12 @@
 package app.cl0udly.ui
 
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
@@ -87,7 +94,7 @@ fun ChatScreen(id: String) {
     val perm = hub.permissions.firstOrNull { it.sessionID == id }
     val question = hub.questions.firstOrNull { it.sessionID == id }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val col = minOf(M.column, maxWidth - 64.dp)
+        val col = minOf(if (Graph.prefs.transcriptWidth == "wide") 1240.dp else M.column, maxWidth - 64.dp)
         Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 SelectionContainer {
@@ -235,7 +242,8 @@ private fun summary(parts: List<Part>): String {
 @Composable
 private fun Steps(parts: List<Part>) {
     val c = Oc.c
-    var open by remember { mutableStateOf(false) }
+    val view = Graph.prefs.transcriptView
+    var open by remember(view) { mutableStateOf(view == "verbose" || view == "thinking" && parts.any { it.type == "reasoning" }) }
     val failed = parts.any { it.status == "error" }
     Column(Modifier.fillMaxWidth().animateContentSize(tween(140))) {
         Row(Modifier.hoverTap(Oc.round(8.dp)) { open = !open }.padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -254,7 +262,8 @@ private fun Steps(parts: List<Part>) {
 @Composable
 private fun Step(p: Part) {
     val c = Oc.c
-    var open by remember { mutableStateOf(false) }
+    val view = Graph.prefs.transcriptView
+    var open by remember(view) { mutableStateOf(view == "verbose" || view == "thinking" && p.type == "reasoning") }
     if (p.type == "reasoning") {
         Row(Modifier.fillMaxWidth()) {
             Box(Modifier.width(2.dp).heightIn(min = 20.dp).background(c.border))
@@ -369,39 +378,78 @@ private fun PermissionPanel(r: PermissionReq) {
     }
 }
 
+/** Claude's question card: numbered answers (keys 1–9), "Something else" with your own words, Skip. Several questions go one by one. */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 private fun QuestionPanel(q: QuestionReq) {
     val c = Oc.c
-    val item = q.questions.firstOrNull() ?: return
-    var own by remember(q.id) { mutableStateOf("") }
-    val picked = remember(q.id) { androidx.compose.runtime.mutableStateListOf<String>() }
+    var step by remember(q.id) { mutableStateOf(0) }
+    val answers = remember(q.id) { androidx.compose.runtime.mutableStateListOf<List<String>>() }
+    val item = q.questions.getOrNull(step) ?: return
+    var own by remember(q.id, step) { mutableStateOf("") }
+    var typing by remember(q.id, step) { mutableStateOf(false) }
+    val picked = remember(q.id, step) { androidx.compose.runtime.mutableStateListOf<String>() }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    fun answer(a: List<String>) {
+        answers.add(a)
+        if (answers.size >= q.questions.size) Graph.hub.replyQuestion(q, answers.toList()) else step++
+    }
+    fun choose(i: Int) {
+        val o = item.options.getOrNull(i) ?: return
+        if (item.multiple) { if (o.label in picked) picked.remove(o.label) else picked.add(o.label) } else answer(listOf(o.label))
+    }
+    LaunchedEffect(q.id, step) { kotlinx.coroutines.delay(40); runCatching { focus.requestFocus() } }
     Column(
-        Modifier.fillMaxWidth().clip(Oc.round(M.composerRadius)).background(c.surface).border(1.dp, c.border, Oc.round(M.composerRadius)).padding(18.dp),
+        Modifier.fillMaxWidth().clip(Oc.round(M.composerRadius)).background(c.surface).border(1.dp, c.border, Oc.round(M.composerRadius))
+            .focusRequester(focus).focusable()
+            .onPreviewKeyEvent { e ->
+                if (e.type != KeyEventType.KeyDown || typing) return@onPreviewKeyEvent false
+                val n = when (e.key) { Key.One -> 0; Key.Two -> 1; Key.Three -> 2; Key.Four -> 3; Key.Five -> 4; Key.Six -> 5; Key.Seven -> 6; Key.Eight -> 7; Key.Nine -> 8; else -> -1 }
+                if (n >= 0) { if (n == item.options.size && item.custom) typing = true else choose(n); true } else false
+            }
+            .padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (item.header.isNotBlank()) Txt(item.header.uppercase(), size = 11.sp, color = c.textDim, family = Oc.label, weight = FontWeight.Medium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (item.header.isNotBlank()) Txt(item.header.uppercase(), size = 11.sp, color = c.textDim, family = Oc.label, weight = FontWeight.Medium, modifier = Modifier.weight(1f))
+            else Spacer(Modifier.weight(1f))
+            if (q.questions.size > 1) Txt("${step + 1} of ${q.questions.size}", size = 12.sp, color = c.textDim)
+        }
         Txt(item.question, size = 16.sp, weight = FontWeight.SemiBold)
-        item.options.forEach { o ->
+        item.options.forEachIndexed { i, o ->
             val on = o.label in picked
             Row(
                 Modifier.fillMaxWidth().clip(Oc.round(10.dp)).border(1.dp, if (on) c.accent else c.border, Oc.round(10.dp))
-                    .hoverTap(Oc.round(10.dp)) {
-                        if (item.multiple) { if (on) picked.remove(o.label) else picked.add(o.label) }
-                        else Graph.hub.replyQuestion(q, listOf(listOf(o.label)))
-                    }.padding(horizontal = 14.dp, vertical = 10.dp),
+                    .hoverTap(Oc.round(10.dp), on) { choose(i) }.padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column {
+                Box(Modifier.size(24.dp).clip(Oc.round(6.dp)).background(c.surfaceHigh), contentAlignment = Alignment.Center) {
+                    if (on) Icon(Ic.Check, 14.dp, c.accent) else Txt("${i + 1}", size = 13.sp, family = Oc.mono, color = c.textDim)
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
                     Txt(o.label, size = 15.sp, weight = FontWeight.Medium)
                     if (o.description.isNotBlank()) Txt(o.description, size = 13.sp, color = c.textDim)
                 }
             }
         }
-        if (item.custom) Field(own, { own = it }, "Or type your own answer", Modifier.fillMaxWidth().clip(Oc.round(10.dp)).border(1.dp, c.border, Oc.round(10.dp)).padding(12.dp), size = 15)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (item.multiple || own.isNotBlank()) Button("Answer") {
-                Graph.hub.replyQuestion(q, listOf(picked.toList() + listOfNotNull(own.trim().takeIf { it.isNotEmpty() })))
-            }
+        if (item.custom) {
+            if (!typing) Row(
+                Modifier.fillMaxWidth().clip(Oc.round(10.dp)).border(1.dp, c.border, Oc.round(10.dp)).hoverTap(Oc.round(10.dp)) { typing = true }.padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(24.dp).clip(Oc.round(6.dp)).background(c.surfaceHigh), contentAlignment = Alignment.Center) {
+                    Txt("${item.options.size + 1}", size = 13.sp, family = Oc.mono, color = c.textDim)
+                }
+                Spacer(Modifier.width(12.dp))
+                Txt("Something else", size = 15.sp, color = c.textDim)
+            } else Field(own, { own = it }, "Type your answer and press Enter", Modifier.fillMaxWidth().clip(Oc.round(10.dp)).border(1.dp, c.accent, Oc.round(10.dp)).padding(12.dp)
+                .onPreviewKeyEvent { e -> if (e.type == KeyEventType.KeyDown && e.key == Key.Enter && own.isNotBlank()) { answer(picked.toList() + own.trim()); true } else false }, size = 15)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (item.multiple || own.isNotBlank()) Button("Answer") { answer(picked.toList() + listOfNotNull(own.trim().takeIf { it.isNotEmpty() })) }
             Spacer(Modifier.weight(1f))
+            Txt("Esc to skip", size = 12.sp, color = c.textDim)
             Button("Skip", primary = false) { Graph.hub.replyQuestion(q, null) }
         }
     }

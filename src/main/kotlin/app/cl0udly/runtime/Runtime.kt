@@ -85,7 +85,8 @@ class RuntimeController(private val prefs: Prefs, private val scope: CoroutineSc
 
     private fun spawn(): Process {
         Paths.chats.mkdirs()
-        val pb = ProcessBuilder(bin.absolutePath, "serve", "--hostname", "127.0.0.1", "--port", prefs.serverPort)
+        val pb = // Remote control: the phone on the same network joins this server (the password still guards it)
+        ProcessBuilder(bin.absolutePath, "serve", "--hostname", if (prefs.remoteControl) "0.0.0.0" else "127.0.0.1", "--port", prefs.serverPort)
             .directory(Paths.chats)
             .redirectErrorStream(true)
             .redirectOutput(ProcessBuilder.Redirect.appendTo(log.also { it.parentFile.mkdirs(); if (it.length() > 2_000_000) it.delete() }))

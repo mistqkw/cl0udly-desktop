@@ -74,8 +74,14 @@ fun Home() {
                 placeholder = if (code) "Describe a task for ${File(dir).name}" else "How can I help you today?",
                 modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(),
             )
+            if (code) {
+                Spacer(Modifier.height(10.dp))
+                Row(Modifier.widthIn(max = 720.dp).fillMaxWidth()) { FolderChip(dir) }
+            }
             Spacer(Modifier.height(18.dp))
             Suggestions(code) { Graph.scope.launchSend(dir, it) }
+            Spacer(Modifier.height(28.dp))
+            Recent(code, dir)
             Spacer(Modifier.weight(1.3f))
         }
     }
@@ -143,9 +149,6 @@ private fun Suggestions(code: Boolean, onPick: (String) -> Unit) {
     }
 }
 
-/** A suggestion for chats only starts the sentence: it goes into the field, not straight to the model. */
-object ComposerPrefill { var text by mutableStateOf<String?>(null) }
-
 @Composable
 fun Chip(ic: Ic?, label: String, onClick: () -> Unit) {
     val c = Oc.c
@@ -191,6 +194,56 @@ private fun ProjectPicker() {
                     }
                     Box(Modifier.size(28.dp).hoverTap(Oc.round(8.dp)) { prefs.removeProject(d) }, contentAlignment = Alignment.Center) { Icon(Ic.Close, 13.dp, c.textDim) }
                 }
+            }
+        }
+    }
+}
+
+/** Claude Code's "Project or folder" chip under the input: the folder this session will work in. */
+@Composable
+private fun FolderChip(dir: String) {
+    val c = Oc.c
+    val prefs = Graph.prefs
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Row(Modifier.hoverTap(Oc.round(8.dp)) { open = true }.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Ic.Folder, 15.dp, c.textDim)
+            Spacer(Modifier.width(8.dp))
+            Txt(File(dir).name, size = 14.sp, color = c.textDim)
+            Spacer(Modifier.width(4.dp))
+            Icon(Ic.Chevron, 14.dp, c.textDim)
+        }
+        app.cl0udly.ui.kit.Pop(open, { open = false }, minWidth = 300.dp) {
+            app.cl0udly.ui.kit.PopHeader("Project or folder")
+            prefs.projectList.take(8).forEach { d ->
+                app.cl0udly.ui.kit.PopItem(File(d).name, Ic.Folder, sub = d.replace(System.getProperty("user.home"), "~"), checked = d == dir) {
+                    open = false; Nav.project = d; prefs.addProject(d)
+                }
+            }
+            app.cl0udly.ui.kit.PopDivider()
+            app.cl0udly.ui.kit.PopItem("Open a folder…", Ic.Plus, hint = "Ctrl+O") { open = false; pickProject() }
+        }
+    }
+}
+
+/** The last few sessions under the suggestions (OpenCode desktop's home lists them too). */
+@Composable
+private fun Recent(code: Boolean, dir: String) {
+    val c = Oc.c
+    val hub = Graph.hub
+    val list = hub.sessions.filter { if (code) it.directory == dir else hub.isChat(it) }.take(4)
+    if (list.isEmpty()) return
+    Column(Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
+        Txt("Recent", size = 13.sp, color = c.textDim, family = Oc.label, modifier = Modifier.padding(start = 10.dp, bottom = 4.dp))
+        list.forEach { s ->
+            Row(
+                Modifier.fillMaxWidth().height(38.dp).hoverTap(Oc.round(8.dp)) { Nav.go(Screen.Chat(s.id)) }.padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(if (code) Ic.Code else Ic.Chat, 15.dp, c.textDim)
+                Spacer(Modifier.width(10.dp))
+                Txt(s.displayTitle, size = 14.sp, maxLines = 1, modifier = Modifier.weight(1f))
+                Txt(ago(s.time.updated), size = 12.sp, color = c.textDim)
             }
         }
     }

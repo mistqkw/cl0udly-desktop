@@ -99,7 +99,46 @@ class Prefs(private val file: File = File(Paths.config, "prefs.json")) {
     var petCount by str("0")
     var introSeen by flag(false)
 
+    /** Pinned session ids, newest first. */
+    var pinned by str("")
+    /** Recently picked models ("provider/model"), the top four get number keys in the picker. */
+    var recentModels by str("")
+    /** Models hidden from the picker (OpenCode desktop: Settings → Models toggles). */
+    var hiddenModels by str("")
+    /** manual: ask before tools; auto: allow everything, like Claude's Auto. */
+    var permMode by str("manual")
+    /** normal | thinking | verbose: how much of the agent's work the transcript shows. */
+    var transcriptView by str("normal")
+    var transcriptWidth by str("narrow")
+    var motion by str("system")
+    var userAbout by str("")
+
+    // notifications and the desktop
+    var notifyDone by flag(true)
+    var notifyPermission by flag(true)
+    var notifyErrors by flag(false)
+    var keepAwake by flag(true)
+    var runOnStartup by flag(false)
+    var autoOpenFiles by flag(true)
+    var linksInBrowser by flag(true)
+    var terminalShell by str("")
+
+    // Remote control: the phone joins this computer's server over the local network
+    var remoteControl by flag(false)
+
+    // usage limits (OpenCode Go: $12 per 5 hours, $30 a week, $60 a month), counted locally
+    var limit5h by str("12")
+    var limitWeek by str("30")
+    var limitMonth by str("60")
+    var limitProviders by str("opencode-go")
+
     val projectList: List<String> get() = projects.split('\n').filter { it.isNotBlank() }
+    val pinnedList: List<String> get() = pinned.split('\n').filter { it.isNotBlank() }
+    fun togglePin(id: String) { pinned = (if (id in pinnedList) pinnedList - id else listOf(id) + pinnedList).joinToString("\n") }
+    val recentModelList: List<String> get() = recentModels.split('\n').filter { it.isNotBlank() }
+    fun useModel(key: String) { recentModels = (listOf(key) + recentModelList.filter { it != key }).take(8).joinToString("\n") }
+    val hiddenModelSet: Set<String> get() = hiddenModels.split('\n').filter { it.isNotBlank() }.toSet()
+    fun toggleHidden(key: String) { hiddenModels = (if (key in hiddenModelSet) hiddenModelSet - key else hiddenModelSet + key).joinToString("\n") }
     fun addProject(dir: String) { projects = (listOf(dir) + projectList.filter { it != dir }).take(20).joinToString("\n") }
     fun removeProject(dir: String) { projects = projectList.filter { it != dir }.joinToString("\n") }
 

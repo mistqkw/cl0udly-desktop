@@ -52,15 +52,32 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
         private set
     var loaded by mutableStateOf(false)
         private set
+    var commands by mutableStateOf<List<app.cl0udly.api.NamedItem>>(emptyList())
+        private set
+    var skills by mutableStateOf<List<app.cl0udly.api.NamedItem>>(emptyList())
+        private set
 
     val sessions: List<Session>
         get() = all.values.filter { it.parentID == null && it.time.archived == null }.sortedByDescending { it.time.updated }
+
+    val archived: List<Session>
+        get() = all.values.filter { it.parentID == null && it.time.archived != null }.sortedByDescending { it.time.updated }
 
     fun session(id: String) = all[id]
     fun isChat(s: Session) = s.directory == CHAT_DIR
 
     fun start() {
         scope.launch { events.events.collect(::handle) }
+        // a reply finished while you were elsewhere: a desktop notification
+        scope.launch {
+            finished.collect { id ->
+                if (prefs.notifyDone && !Desktop.focused) Desktop.notify(all[id]?.displayTitle ?: "cl0udly", "The reply is ready")
+            }
+        }
+        // keep the computer awake while the agent works
+        scope.launch {
+            androidx.compose.runtime.snapshotFlow { statuses.isNotEmpty() && prefs.keepAwake }.collect { Desktop.inhibit(it) }
+        }
         scope.launch { events.generation.collect { if (it > 0) reload() } }
     }
 
@@ -91,6 +108,8 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
             }
         }
         runCatching { agents = api.agents().filter { it.mode != "subagent" && !it.hidden }.map { it.name } }
+        runCatching { commands = api.commands() }
+        runCatching { skills = api.skills() }
     }
 
     val pick: Pick? get() = picks.firstOrNull { it.provider.id == prefs.providerId && it.model.id == prefs.modelId }
@@ -122,13 +141,21 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
                 if (t == "idle" && was != null) finished.tryEmit(id)
             }
             "session.idle" -> p.str("sessionID")?.let { id -> if (statuses.remove(id) != null) finished.tryEmit(id) }
-            "permission.asked" -> parsePermission(p).let { r -> permissions.removeAll { it.id == r.id }; permissions.add(r) }
+            "permission.asked" -> parsePermission(p).let { r ->
+                // Auto mode: the agent goes on by itself, like Claude's Auto
+                if (prefs.permMode == "auto") { scope.launch { runCatching { api.replyPermission(r.id, e.directory ?: all[r.sessionID]?.directory, "once") }.onFailure { permissions.add(r) } }; return }
+                permissions.removeAll { it.id == r.id }; permissions.add(r)
+                if (prefs.notifyPermission) Desktop.notify("cl0udly needs your OK", "${all[r.sessionID]?.displayTitle ?: "A session"} wants to use ${r.permission}")
+            }
             "permission.replied" -> p.str("requestID")?.let { rid -> permissions.removeAll { it.id == rid } }
             "question.asked" -> parseQuestion(p).let { q -> questions.removeAll { it.id == q.id }; questions.add(q) }
             "question.replied", "question.rejected" -> p.str("requestID")?.let { rid -> questions.removeAll { it.id == rid } }
             "session.error" -> {
                 val msg = p.obj("error")?.obj("data")?.str("message") ?: p.obj("error")?.str("name")
-                if (msg != null && msg != "MessageAbortedError") toasts.tryEmit(msg)
+                if (msg != null && msg != "MessageAbortedError") {
+                    toasts.tryEmit(msg)
+                    if (prefs.notifyErrors) Desktop.notify("cl0udly ran into an error", msg)
+                }
             }
             else -> {
                 val sid = p.str("sessionID") ?: p.obj("info")?.str("sessionID") ?: p.obj("part")?.str("sessionID")
@@ -174,15 +201,57 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
 
     suspend fun send(id: String, text: String) {
         val c = chat(id)
+        // "/name args": a slash command the server knows runs as a command, not as plain text
+        if (text.startsWith("/")) {
+            val name = text.drop(1).substringBefore(' ')
+            if (commands.any { it.name == name }) {
+                c.addLocalUser(text); statuses[id] = "busy"
+                runCatching { api.command(id, all[id]?.directory, name, text.drop(1).substringAfter(' ', ""), prefs.providerId, prefs.modelId, prefs.agent) }
+                    .onFailure { statuses.remove(id); toasts.tryEmit(it.message ?: "Could not run /$name") }
+                return
+            }
+            if (name == "compact") { compact(id); return }
+        }
         val local = c.addLocalUser(text)
         statuses[id] = "busy"
         try {
             val parts = buildJsonArray { add(buildJsonObject { put("type", JsonPrimitive("text")); put("text", JsonPrimitive(text)) }) }
-            api.promptAsync(id, all[id]?.directory, parts, prefs.providerId, prefs.modelId, prefs.agent, prefs.variant.ifBlank { null })
+            api.promptAsync(
+                id, all[id]?.directory, parts, prefs.providerId, prefs.modelId, prefs.agent, prefs.variant.ifBlank { null },
+                prefs.userAbout.takeIf { it.isNotBlank() }?.let { "About the user (from their settings):\n$it" },
+            )
+            pick?.let { prefs.useModel(it.key) }
         } catch (e: Exception) {
             c.dropLocal(local); statuses.remove(id)
             toasts.tryEmit(e.message ?: "Could not send")
         }
+    }
+
+    fun fork(id: String) = scope.launch {
+        runCatching { val s = api.forkSession(id, all[id]?.directory, null); all[s.id] = s; app.cl0udly.ui.Nav.go(app.cl0udly.ui.Screen.Chat(s.id)) }
+            .onFailure { toasts.tryEmit(it.message ?: "Could not fork") }
+    }
+
+    fun archive(id: String) = scope.launch {
+        runCatching { api.archiveSession(id, all[id]?.directory); all[id]?.let { all[id] = it.copy(time = it.time.copy(archived = System.currentTimeMillis())) } }
+            .onFailure { toasts.tryEmit(it.message ?: "Could not archive") }
+    }
+
+    /** Claude's "Compact session": OpenCode summarizes the conversation so far and keeps going from the summary. */
+    fun compact(id: String) = scope.launch {
+        runCatching { api.summarize(id, all[id]?.directory, prefs.providerId, prefs.modelId) }
+            .onFailure { toasts.tryEmit(it.message ?: "Could not compact") }
+    }
+
+    /** The whole transcript as Markdown, for Export. */
+    fun exportMarkdown(id: String): String {
+        val s = all[id]
+        val sb = StringBuilder("# ${s?.displayTitle ?: id}\n\n")
+        chat(id).messages.forEach { m ->
+            sb.append(if (m.info.isUser) "## You\n\n" else "## cl0udly\n\n")
+            m.parts.filter { it.type == "text" }.forEach { sb.append(it.text.trim()).append("\n\n") }
+        }
+        return sb.toString()
     }
 
     fun stop(id: String) = scope.launch { runCatching { api.abort(id, all[id]?.directory) } }

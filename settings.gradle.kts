@@ -11,6 +11,10 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // JediTerm (the terminal widget of JetBrains IDEs) is published only here
+        maven("https://packages.jetbrains.team/maven/p/ij/intellij-dependencies") {
+            content { includeGroup("org.jetbrains.jediterm") }
+        }
     }
 }
 

@@ -215,6 +215,15 @@ class OpenCodeApi(private val prefs: Prefs) {
         call("POST", "/session/$id/prompt_async", dir(directory), body)
     }
 
+    /** A slash command (/init, /review, a skill…): the server expands it and runs it in the session. */
+    suspend fun command(id: String, directory: String?, command: String, arguments: String, providerID: String?, modelID: String?, agent: String?) {
+        call("POST", "/session/$id/command", dir(directory), buildJsonObject {
+            put("command", command); put("arguments", arguments)
+            if (!agent.isNullOrBlank()) put("agent", agent)
+            if (!providerID.isNullOrBlank() && !modelID.isNullOrBlank()) put("model", "$providerID/$modelID")
+        })
+    }
+
     // ---------- permissions and questions ----------
 
     suspend fun permissions(directory: String?): List<PermissionReq> =

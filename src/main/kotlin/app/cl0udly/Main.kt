@@ -41,6 +41,10 @@ import app.cl0udly.ui.Shell
 import app.cl0udly.ui.cloud.CloudIntro
 import app.cl0udly.ui.cloud.Pointer
 import app.cl0udly.ui.pickProject
+import app.cl0udly.ui.PickerDialog
+import app.cl0udly.ui.SettingsDialog
+import app.cl0udly.ui.Pickers
+import androidx.compose.ui.input.key.isAltPressed
 import app.cl0udly.ui.theme.Oc
 import app.cl0udly.ui.theme.OcTheme
 import kotlinx.coroutines.flow.first
@@ -48,6 +52,9 @@ import kotlinx.coroutines.flow.first
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
     System.setProperty("skiko.renderApi", System.getProperty("skiko.renderApi") ?: "OPENGL")
+    // the terminal and the browser are Swing/JavaFX views: blending lets menus and dialogs draw over them
+    System.setProperty("compose.interop.blending", "true")
+    System.setProperty("compose.swing.render.on.graphics", "true")
     // the window class on X11/XWayland: without it Hyprland sees "java-lang-Thread" and the .desktop icon doesn't match
     runCatching {
         val tk = java.awt.Toolkit.getDefaultToolkit()
@@ -60,11 +67,18 @@ fun main() {
         val state = rememberWindowState(size = androidx.compose.ui.unit.DpSize(1440.dp, 900.dp))
         val icon = remember { runCatching { BitmapPainter(Thread.currentThread().contextClassLoader.getResourceAsStream("icon.png")!!.use(::loadImageBitmap)) }.getOrNull() }
         fun quit() { Graph.runtime.stop(); exitApplication() }
+        Nav.quit = ::quit
         Window(
             onCloseRequest = ::quit, state = state, title = "cl0udly", icon = icon, undecorated = true,
             onPreviewKeyEvent = ::shortcut,
         ) {
-            LaunchedEffect(Unit) { window.minimumSize = java.awt.Dimension(720, 560) }
+            LaunchedEffect(Unit) {
+                window.minimumSize = java.awt.Dimension(720, 560)
+                window.addWindowFocusListener(object : java.awt.event.WindowFocusListener {
+                    override fun windowGainedFocus(e: java.awt.event.WindowEvent?) { app.cl0udly.data.Desktop.focused = true }
+                    override fun windowLostFocus(e: java.awt.event.WindowEvent?) { app.cl0udly.data.Desktop.focused = false }
+                })
+            }
             OcTheme {
                 Box(
                     Modifier.fillMaxSize().background(Oc.c.bg)
@@ -74,6 +88,8 @@ fun main() {
                     Shell(onClose = ::quit)
                     SearchOverlay()
                     QuickEntry()
+                    SettingsDialog()
+                    PickerDialog()
                     Intro()
                 }
             }
@@ -84,16 +100,31 @@ fun main() {
 private fun shortcut(e: KeyEvent): Boolean {
     if (e.type != KeyEventType.KeyDown) return false
     val p = Graph.prefs
-    if (e.isCtrlPressed) when (e.key) {
+    if (e.isCtrlPressed && e.isShiftPressed) when (e.key) {
+        Key.Spacebar -> { Nav.quick = !Nav.quick; return true }
+        Key.B -> { Nav.toggle("browser"); return true }
+        Key.D -> { Nav.toggle("diff"); return true }
+        Key.E -> { Nav.toggle("files"); return true }
+        Key.O -> { Pickers.openFile(); return true }
+        else -> {}
+    } else if (e.isCtrlPressed && !e.isAltPressed) when (e.key) {
         Key.N -> { Nav.go(Screen.Home); return true }
         Key.K -> { Nav.search = !Nav.search; return true }
         Key.B -> { p.sidebarOpen = !p.sidebarOpen; return true }
-        Key.Comma -> { Nav.go(Screen.Settings()); return true }
+        Key.Comma -> { Nav.settings = if (Nav.settings == null) "general" else null; return true }
         Key.O -> { pickProject(); return true }
-        Key.Spacebar -> if (e.isShiftPressed) { Nav.quick = !Nav.quick; return true }
+        Key.I -> { Nav.toggle("context"); return true }
+        Key.Grave -> { Nav.toggle("terminal"); return true }
+        Key.Q -> { Nav.quit(); return true }
+        Key.LeftBracket -> { Nav.back(); return true }
+        Key.RightBracket -> { Nav.forward(); return true }
+        Key.Equals, Key.Plus -> { p.textSize = if (p.textSize == "small") "default" else "large"; return true }
+        Key.Minus -> { p.textSize = if (p.textSize == "large") "default" else "small"; return true }
         else -> {}
     }
     if (e.key == Key.Escape) {
+        if (Nav.picker != null) { Nav.picker = null; return true }
+        if (Nav.settings != null) { Nav.settings = null; return true }
         if (Nav.search || Nav.quick) { Nav.search = false; Nav.quick = false; return true }
         (Nav.screen as? Screen.Chat)?.id?.let { id -> if (Graph.hub.statuses[id] != null) { Graph.hub.stop(id); return true } }
     }

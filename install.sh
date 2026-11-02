@@ -11,15 +11,19 @@ cp -r build/compose/binaries/main/app/cl0udly "$APP"
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$HOME/.local/share/icons/hicolor/512x512/apps"
 ln -sf "$APP/bin/cl0udly" "$HOME/.local/bin/cl0udly"
 cp src/main/resources/icon.png "$HOME/.local/share/icons/hicolor/512x512/apps/cl0udly.png"
+cp src/main/resources/icon.png "$APP/cl0udly.png"
+# a menu that doesn't rescan hicolor still finds the icon by its full path
+gtk-update-icon-cache -q -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 cat > "$HOME/.local/share/applications/cl0udly.desktop" <<D
 [Desktop Entry]
 Name=cl0udly
 Comment=OpenCode with a little cloud
 Exec=$APP/bin/cl0udly
-Icon=cl0udly
+Icon=$APP/cl0udly.png
 Terminal=false
 Type=Application
 Categories=Development;
 StartupWMClass=cl0udly
 D
+update-desktop-database -q "$HOME/.local/share/applications" 2>/dev/null || true
 echo "Готово: команда cl0udly и ярлык в меню"
