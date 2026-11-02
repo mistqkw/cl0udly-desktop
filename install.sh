@@ -3,7 +3,7 @@
 set -e
 cd "$(dirname "$0")"
 export JAVA_HOME="${JAVA_HOME:-$HOME/toolchain/jdk}"
-systemd-run --user --scope -q -p MemoryMax=3500M -p CPUQuota=150% nice -n 10 \
+systemd-run --user --scope -q -p MemoryMax=3000M -p CPUQuota=150% nice -n 10 \
   ./gradlew createDistributable --no-daemon -Pkotlin.compiler.execution.strategy=in-process --max-workers=2
 APP="$HOME/.local/share/cl0udly-app"
 rm -rf "$APP"
