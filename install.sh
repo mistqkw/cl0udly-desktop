@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Ставит cl0udly на этот компьютер: ~/.local/share/cl0udly-app, команда `cl0udly`, ярлык в меню.
+set -e
+cd "$(dirname "$0")"
+export JAVA_HOME="${JAVA_HOME:-$HOME/toolchain/jdk}"
+systemd-run --user --scope -q -p MemoryMax=3500M -p CPUQuota=150% nice -n 10 \
+  ./gradlew createDistributable --no-daemon -Pkotlin.compiler.execution.strategy=in-process --max-workers=2
+APP="$HOME/.local/share/cl0udly-app"
+rm -rf "$APP"
+cp -r build/compose/binaries/main/app/cl0udly "$APP"
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$HOME/.local/share/icons/hicolor/512x512/apps"
+ln -sf "$APP/bin/cl0udly" "$HOME/.local/bin/cl0udly"
+cp src/main/resources/icon.png "$HOME/.local/share/icons/hicolor/512x512/apps/cl0udly.png"
+cat > "$HOME/.local/share/applications/cl0udly.desktop" <<D
+[Desktop Entry]
+Name=cl0udly
+Comment=OpenCode with a little cloud
+Exec=$APP/bin/cl0udly
+Icon=cl0udly
+Terminal=false
+Type=Application
+Categories=Development;
+StartupWMClass=cl0udly
+D
+echo "Готово: команда cl0udly и ярлык в меню"

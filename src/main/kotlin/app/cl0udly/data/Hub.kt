@@ -1,0 +1,211 @@
+package app.cl0udly.data
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import app.cl0udly.api.EventHub
+import app.cl0udly.api.ModelInfo
+import app.cl0udly.api.OcJson
+import app.cl0udly.api.OpenCodeApi
+import app.cl0udly.api.PermissionReq
+import app.cl0udly.api.ProviderInfo
+import app.cl0udly.api.QuestionReq
+import app.cl0udly.api.Session
+import app.cl0udly.api.obj
+import app.cl0udly.api.parsePermission
+import app.cl0udly.api.parseQuestion
+import app.cl0udly.api.str
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+
+/** A model the user can pick: provider, model and its name for the picker. */
+data class Pick(val provider: ProviderInfo, val model: ModelInfo) {
+    val key get() = "${provider.id}/${model.id}"
+    val label get() = model.name.ifBlank { model.id }
+}
+
+/**
+ * Everything the screens read: sessions, what each one is doing, open chats, requests from the agent
+ * and models. All of it is Compose state changed on the UI thread (events are collected there).
+ */
+class Hub(private val api: OpenCodeApi, private val events: EventHub, private val prefs: Prefs, private val scope: CoroutineScope) {
+    private val all = mutableStateMapOf<String, Session>()
+    /** busy | retry per session; absent means idle. */
+    val statuses = mutableStateMapOf<String, String>()
+    val retryNote = mutableStateMapOf<String, String>()
+    val permissions = mutableStateListOf<PermissionReq>()
+    val questions = mutableStateListOf<QuestionReq>()
+    private val chats = HashMap<String, Chat>()
+    val toasts = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    /** A reply finished while the window was not focused or another chat was open: the mascot cheers. */
+    val finished = MutableSharedFlow<String>(extraBufferCapacity = 8)
+
+    var picks by mutableStateOf<List<Pick>>(emptyList())
+        private set
+    var agents by mutableStateOf<List<String>>(listOf("build", "plan"))
+        private set
+    var loaded by mutableStateOf(false)
+        private set
+
+    val sessions: List<Session>
+        get() = all.values.filter { it.parentID == null && it.time.archived == null }.sortedByDescending { it.time.updated }
+
+    fun session(id: String) = all[id]
+    fun isChat(s: Session) = s.directory == CHAT_DIR
+
+    fun start() {
+        scope.launch { events.events.collect(::handle) }
+        scope.launch { events.generation.collect { if (it > 0) reload() } }
+    }
+
+    suspend fun reload() {
+        runCatching {
+            val list = api.listSessions(limit = 500)
+            all.clear(); list.forEach { all[it.id] = it }
+            statuses.clear()
+            api.statuses(null).forEach { (id, o) -> o.str("type")?.takeIf { it != "idle" }?.let { statuses[id] = it } }
+            permissions.clear(); permissions.addAll(api.permissions(null))
+            questions.clear(); questions.addAll(api.questions(null))
+            chats.values.forEach { it.load() }
+        }.onFailure { toasts.tryEmit(it.message ?: "Could not load sessions") }
+        loadModels()
+        loaded = true
+    }
+
+    suspend fun loadModels() {
+        runCatching {
+            val r = api.connectedProviders()
+            picks = r.providers.flatMap { p -> p.models.values.filter { it.status != "deprecated" }.map { Pick(p, it) } }
+                .sortedWith(compareBy({ it.provider.name }, { it.label }))
+            if (picks.none { it.provider.id == prefs.providerId && it.model.id == prefs.modelId }) {
+                val def = r.default.entries.firstOrNull()
+                val fallback = picks.firstOrNull { it.provider.id == def?.key && it.model.id == def.value }
+                    ?: picks.firstOrNull { it.model.id.endsWith("-free") } ?: picks.firstOrNull()
+                fallback?.let { prefs.providerId = it.provider.id; prefs.modelId = it.model.id }
+            }
+        }
+        runCatching { agents = api.agents().filter { it.mode != "subagent" && !it.hidden }.map { it.name } }
+    }
+
+    val pick: Pick? get() = picks.firstOrNull { it.provider.id == prefs.providerId && it.model.id == prefs.modelId }
+
+    fun chat(id: String): Chat = chats.getOrPut(id) {
+        Chat(id, api).also { c ->
+            c.directory = all[id]?.directory
+            scope.launch { c.load() }
+        }
+    }
+
+    private fun handle(e: EventHub.Event) {
+        val p = e.props
+        when (e.type) {
+            "session.created", "session.updated" -> p.obj("info")?.let {
+                runCatching { OcJson.decodeFromJsonElement(Session.serializer(), it) }.getOrNull()?.let { s ->
+                    all[s.id] = s; chats[s.id]?.directory = s.directory
+                }
+            }
+            "session.deleted" -> p.obj("info")?.str("id")?.let { all.remove(it) }
+            "session.status" -> {
+                val id = p.str("sessionID") ?: return
+                val st = p.obj("status") ?: return
+                val t = st.str("type") ?: return
+                val was = statuses[id]
+                if (t == "idle") statuses.remove(id) else statuses[id] = t
+                if (t == "retry") retryNote[id] = st.str("message") ?: "Retrying…" else retryNote.remove(id)
+                if (t == "retry" && st.str("message")?.contains("Free usage", true) == true && prefs.providerId != FreeModels.POLLINATIONS_ID) fallToPollinations(id)
+                if (t == "idle" && was != null) finished.tryEmit(id)
+            }
+            "session.idle" -> p.str("sessionID")?.let { id -> if (statuses.remove(id) != null) finished.tryEmit(id) }
+            "permission.asked" -> parsePermission(p).let { r -> permissions.removeAll { it.id == r.id }; permissions.add(r) }
+            "permission.replied" -> p.str("requestID")?.let { rid -> permissions.removeAll { it.id == rid } }
+            "question.asked" -> parseQuestion(p).let { q -> questions.removeAll { it.id == q.id }; questions.add(q) }
+            "question.replied", "question.rejected" -> p.str("requestID")?.let { rid -> questions.removeAll { it.id == rid } }
+            "session.error" -> {
+                val msg = p.obj("error")?.obj("data")?.str("message") ?: p.obj("error")?.str("name")
+                if (msg != null && msg != "MessageAbortedError") toasts.tryEmit(msg)
+            }
+            else -> {
+                val sid = p.str("sessionID") ?: p.obj("info")?.str("sessionID") ?: p.obj("part")?.str("sessionID")
+                if (sid != null) chats[sid]?.onEvent(e.type, p)
+            }
+        }
+    }
+
+    private var switching = false
+
+    /** Zen's free tier is capped: switch to Pollinations and send the last message again (like the phone). */
+    private fun fallToPollinations(id: String) {
+        if (switching) return
+        switching = true
+        scope.launch {
+            try {
+                val c = chat(id)
+                val last = c.messages.lastOrNull { it.info.isUser } ?: return@launch
+                val text = last.parts.filter { it.type == "text" && it.raw.str("synthetic") != "true" }.joinToString("\n") { it.text }
+                if (text.isBlank()) return@launch
+                runCatching { api.abort(id, all[id]?.directory) }
+                FreeModels.enablePollinations()
+                toasts.tryEmit("OpenCode Zen's free limit is used up — switched to GPT-OSS 20B on Pollinations")
+                runCatching { api.revert(id, all[id]?.directory, last.id) }
+                c.truncateFrom(last.id)
+                send(id, text)
+            } catch (e: Exception) {
+                toasts.tryEmit(e.message ?: "Could not switch the model")
+            } finally { switching = false }
+        }
+    }
+
+    // ---------- actions ----------
+
+    /** Starts a session in [directory] (chats folder or a project) and sends the first message. */
+    suspend fun startAndSend(directory: String, text: String): String? = try {
+        java.io.File(directory).mkdirs()
+        val s = api.createSession(directory)
+        all[s.id] = s
+        send(s.id, text)
+        s.id
+    } catch (e: Exception) { toasts.tryEmit(e.message ?: "Could not start a chat"); null }
+
+    suspend fun send(id: String, text: String) {
+        val c = chat(id)
+        val local = c.addLocalUser(text)
+        statuses[id] = "busy"
+        try {
+            val parts = buildJsonArray { add(buildJsonObject { put("type", JsonPrimitive("text")); put("text", JsonPrimitive(text)) }) }
+            api.promptAsync(id, all[id]?.directory, parts, prefs.providerId, prefs.modelId, prefs.agent, prefs.variant.ifBlank { null })
+        } catch (e: Exception) {
+            c.dropLocal(local); statuses.remove(id)
+            toasts.tryEmit(e.message ?: "Could not send")
+        }
+    }
+
+    fun stop(id: String) = scope.launch { runCatching { api.abort(id, all[id]?.directory) } }
+
+    fun rename(id: String, title: String) = scope.launch {
+        runCatching { api.renameSession(id, all[id]?.directory, title) }.onFailure { toasts.tryEmit(it.message ?: "Could not rename") }
+    }
+
+    fun delete(id: String) = scope.launch {
+        runCatching { api.deleteSession(id, all[id]?.directory); all.remove(id); chats.remove(id) }
+            .onFailure { toasts.tryEmit(it.message ?: "Could not delete") }
+    }
+
+    fun replyPermission(r: PermissionReq, reply: String) = scope.launch {
+        runCatching { api.replyPermission(r.id, all[r.sessionID]?.directory, reply); permissions.removeAll { it.id == r.id } }
+            .onFailure { toasts.tryEmit(it.message ?: "Could not answer") }
+    }
+
+    fun replyQuestion(q: QuestionReq, answers: List<List<String>>?) = scope.launch {
+        runCatching {
+            val dir = all[q.sessionID]?.directory
+            if (answers == null) api.rejectQuestion(q.id, dir) else api.replyQuestion(q.id, dir, answers)
+            questions.removeAll { it.id == q.id }
+        }.onFailure { toasts.tryEmit(it.message ?: "Could not answer") }
+    }
+}
