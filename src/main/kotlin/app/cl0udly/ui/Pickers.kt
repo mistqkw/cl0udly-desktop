@@ -50,13 +50,18 @@ import java.io.File
 
 /** Opening folders and files goes through our own picker, drawn in the look (Claude Code has its own too). */
 object Pickers {
-    fun folder(title: String = "Open a project folder", onPick: (String) -> Unit) {
-        Nav.picker = PickRequest(folders = true, multiple = false, title = title, start = Nav.project) { it.firstOrNull()?.let(onPick) }
-    }
+    /** The system dialog (Dolphin's, through the portal); our own one only when there is no portal. */
+    private fun pick(r: PickRequest) = app.cl0udly.data.Portal.open(
+        r.title, r.folders, r.multiple, r.start ?: System.getProperty("user.home"),
+        onPick = { if (it.isNotEmpty()) r.onPick(it) },
+        onFail = { Nav.picker = r },
+    )
 
-    fun files(title: String = "Add files", onPick: (List<String>) -> Unit) {
-        Nav.picker = PickRequest(folders = false, multiple = true, title = title, start = Nav.project) { onPick(it) }
-    }
+    fun folder(title: String = "Open a project folder", onPick: (String) -> Unit) =
+        pick(PickRequest(folders = true, multiple = false, title = title, start = Nav.project) { it.firstOrNull()?.let(onPick) })
+
+    fun files(title: String = "Add files", onPick: (List<String>) -> Unit) =
+        pick(PickRequest(folders = false, multiple = true, title = title, start = Nav.project) { onPick(it) })
 
     /** File → Open file…: text and code open in the Files panel, pages and pictures in the browser. */
     fun openFile() = files("Open a file") { list ->
