@@ -371,7 +371,7 @@ private class PdfDoc(f: File) {
 }
 
 private val MPV: String? by lazy {
-    System.getenv("PATH").orEmpty().split(File.pathSeparator).map { File(it, "mpv") }.firstOrNull { it.canExecute() }?.path
+    if (!app.cl0udly.data.Os.isLinux) null else System.getenv("PATH").orEmpty().split(File.pathSeparator).map { File(it, "mpv") }.firstOrNull { it.canExecute() }?.path
 }
 
 /**

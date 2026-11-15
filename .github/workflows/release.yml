@@ -1,0 +1,98 @@
+# A tag v* builds cl0udly for Linux, Windows and macOS and puts them in that tag's release.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: linux-x64
+          - os: windows-latest
+            name: windows-x64
+          - os: macos-latest
+            name: macos-arm64
+          - os: macos-15-intel
+            name: macos-x64
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Linux
+        if: runner.os == 'Linux'
+        run: |
+          ./gradlew createDistributable --no-daemon
+          cd build/compose/binaries/main/app
+          cp "$GITHUB_WORKSPACE/src/main/resources/icon.png" cl0udly/cl0udly.png
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          tar -czf "$GITHUB_WORKSPACE/out/cl0udly-desktop-$TAG-linux-x64.tar.gz" cl0udly
+
+      - name: Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          ./gradlew packageMsi createDistributable --no-daemon
+          mkdir -p out
+          cp build/compose/binaries/main/msi/*.msi "out/cl0udly-desktop-$TAG-windows-x64.msi"
+          cd build/compose/binaries/main/app
+          7z a -tzip "$GITHUB_WORKSPACE/out/cl0udly-desktop-$TAG-windows-x64.zip" cl0udly > /dev/null
+
+      - name: macOS
+        if: runner.os == 'macOS'
+        run: |
+          ./gradlew packageDmg --no-daemon
+          mkdir -p out
+          cp build/compose/binaries/main/dmg/*.dmg "out/cl0udly-desktop-$TAG-${{ matrix.name }}.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: out/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish
+        run: |
+          ls -la out
+          NOTES="docs/releases/$TAG.md"
+          [ -f "$NOTES" ] || NOTES=/dev/null
+          TITLE="cl0udly desktop $(echo "${TAG#v}" | sed 's/-beta-/ beta-/')"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" out/* --clobber
+          else
+            gh release create "$TAG" out/* --title "$TITLE" --notes-file "$NOTES" --latest
+          fi

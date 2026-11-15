@@ -13,8 +13,9 @@ import kotlin.reflect.KProperty
 /** Where the app keeps its files: XDG folders, like every Linux program. */
 object Paths {
     private val home = System.getProperty("user.home")
-    val data = File(System.getenv("XDG_DATA_HOME")?.takeIf { it.isNotBlank() } ?: "$home/.local/share", "cl0udly")
-    val config = File(System.getenv("XDG_CONFIG_HOME")?.takeIf { it.isNotBlank() } ?: "$home/.config", "cl0udly")
+    // XDG folders on Linux, AppData on Windows, Application Support on macOS
+    val data = File(Os.dataHome, "cl0udly")
+    val config = File(Os.configHome, "cl0udly")
     /** Plain chats live in their own folder, everything else is a project (Code). */
     val chats = File(data, "chats")
     /** Our OpenCode's config folder (its XDG_CONFIG_HOME is data/opencode/config). */

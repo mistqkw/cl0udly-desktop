@@ -46,7 +46,7 @@ object TalkUi { var open by mutableStateOf(false) }
 /**
  * A voice conversation with the cloud, like the phone's voice mode: it listens (Whisper, on this
  * computer), stops by itself when you go quiet, sends it to a chat, and reads the answer aloud with
- * the system's speech (spd-say or espeak-ng; without one the answer is only shown). Then it listens again.
+ * the system's speech (say on macOS, Windows speech, spd-say or espeak-ng on Linux; without one the answer is only shown). Then it listens again.
  * Click the cloud to interrupt it or to stop listening early.
  */
 @Composable
@@ -140,11 +140,17 @@ private fun say(text: String): Process? {
     val clean = text.replace(Regex("```[\\s\\S]*?```"), " ").replace(Regex("[`*#>_|\\[\\]]"), "").replace(Regex("\\((/|https?://)[^)]*\\)"), "").take(2500).trim()
     if (clean.isEmpty()) return null
     val ru = clean.count { it in 'а'..'я' || it in 'А'..'Я' } > clean.length / 5
-    fun has(n: String) = (System.getenv("PATH") ?: "").split(':').any { java.io.File(it, n).canExecute() }
+    fun has(n: String) = (System.getenv("PATH") ?: "").split(java.io.File.pathSeparatorChar).any { java.io.File(it, n).canExecute() }
     val cmd = when {
+        // macOS and Windows have a voice built in
+        app.cl0udly.data.Os.isMac -> listOf("say", clean)
+        app.cl0udly.data.Os.isWindows -> listOf(
+            "powershell", "-NoProfile", "-Command",
+            "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak(\$env:CL0UDLY_SAY)",
+        )
         has("spd-say") -> listOf("spd-say", "-w", "-l", if (ru) "ru" else "en", "-p", "30", clean)
         has("espeak-ng") -> listOf("espeak-ng", "-v", if (ru) "ru" else "en-us", "-p", "65", "-s", "165", clean)
         else -> return null
     }
-    return runCatching { ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start() }.getOrNull()
+    return runCatching { ProcessBuilder(cmd).apply { environment()["CL0UDLY_SAY"] = clean }.redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start() }.getOrNull()
 }

@@ -38,12 +38,12 @@ class RuntimeController(private val prefs: Prefs, private val scope: CoroutineSc
     companion object {
         const val OC_VERSION = "1.19.4"
         const val OC_SHA = "849bd6b3d959a1d2ef200ed1634a51c79a45ca236aa26665d75debd694805cce"
-        fun ocUrl(v: String) = "https://github.com/anomalyco/opencode/releases/download/v$v/opencode-linux-x64.tar.gz"
+        fun ocUrl(v: String) = "https://github.com/anomalyco/opencode/releases/download/v$v/${app.cl0udly.data.Os.ocAsset}"
     }
 
     val state = MutableStateFlow<RuntimeState>(RuntimeState.Idle)
     private val home = File(Paths.data, "opencode")
-    private val bin = File(home, "bin/opencode")
+    private val bin = File(home, "bin/" + app.cl0udly.data.Os.ocExe)
     private val log = File(home, "serve.log")
     private var process: Process? = null
     private var watch: Job? = null
@@ -53,7 +53,7 @@ class RuntimeController(private val prefs: Prefs, private val scope: CoroutineSc
     val installed get() = bin.canExecute()
     /** The version in bin/, and the one kept in prev/ (null when there is none). */
     val version get() = runCatching { File(home, "bin/VERSION").readText().trim() }.getOrNull()?.ifBlank { null } ?: OC_VERSION
-    val previous get() = File(home, "prev/opencode").takeIf { it.canExecute() }?.let { runCatching { File(home, "prev/VERSION").readText().trim() }.getOrNull() ?: OC_VERSION }
+    val previous get() = File(home, "prev/" + app.cl0udly.data.Os.ocExe).takeIf { it.canExecute() }?.let { runCatching { File(home, "prev/VERSION").readText().trim() }.getOrNull() ?: OC_VERSION }
     val folder: File get() = home
 
     fun start() {
@@ -133,14 +133,17 @@ class RuntimeController(private val prefs: Prefs, private val scope: CoroutineSc
     }
 
     private fun install() {
-        download(ocUrl(OC_VERSION), OC_SHA, File(home, "bin"), "Downloading OpenCode $OC_VERSION")
+        // the pinned sum is for the Linux x64 build; other systems take the sum GitHub lists for their archive
+        val sha = if (app.cl0udly.data.Os.ocAsset == "opencode-linux-x64.tar.gz") OC_SHA else releaseDigest(OC_VERSION, app.cl0udly.data.Os.ocAsset)
+        download(ocUrl(OC_VERSION), sha, File(home, "bin"), "Downloading OpenCode $OC_VERSION")
         if (!bin.canExecute()) error("no opencode binary in the archive")
     }
 
     /** Fetches a release archive, checks its sha256 and unpacks it into [into]. */
     fun download(url: String, sha256: String, into: File, note: String) {
         home.mkdirs()
-        val tgz = File(home, "opencode.tar.gz.part")
+        val zip = url.endsWith(".zip")
+        val tgz = File(home, if (zip) "opencode.zip.part" else "opencode.tar.gz.part")
         state.value = RuntimeState.Installing(0f, note).takeIf { into.name == "bin" } ?: state.value
         Graph.api.http.newCall(Request.Builder().url(url).build()).execute().use { r ->
             if (!r.isSuccessful) error("HTTP ${r.code}")
@@ -166,11 +169,36 @@ class RuntimeController(private val prefs: Prefs, private val scope: CoroutineSc
         }
         if (into.name == "bin") state.value = RuntimeState.Installing(1f, "Unpacking")
         into.mkdirs()
-        val tar = ProcessBuilder("tar", "-xzf", tgz.absolutePath, "-C", into.absolutePath).redirectErrorStream(true).start()
-        val out = tar.inputStream.bufferedReader().readText()
-        if (tar.waitFor() != 0) error("tar: $out")
+        if (zip) unzip(tgz, into) else {
+            val tar = ProcessBuilder("tar", "-xzf", tgz.absolutePath, "-C", into.absolutePath).redirectErrorStream(true).start()
+            val out = tar.inputStream.bufferedReader().readText()
+            if (tar.waitFor() != 0) error("tar: $out")
+        }
         tgz.delete()
-        File(into, "opencode").setExecutable(true)
+        File(into, app.cl0udly.data.Os.ocExe).setExecutable(true)
+    }
+
+    /** Windows and macOS builds come as zip: the program is at the top of it. */
+    private fun unzip(zip: File, into: File) {
+        java.util.zip.ZipInputStream(zip.inputStream().buffered()).use { z ->
+            var e = z.nextEntry
+            while (e != null) {
+                val f = File(into, e.name)
+                if (!e.isDirectory && f.canonicalPath.startsWith(into.canonicalPath)) { f.parentFile.mkdirs(); f.outputStream().use { z.copyTo(it) } }
+                e = z.nextEntry
+            }
+        }
+    }
+
+    /** The sha256 GitHub lists for an OpenCode release archive. */
+    fun releaseDigest(v: String, asset: String): String {
+        val req = Request.Builder().url("https://api.github.com/repos/anomalyco/opencode/releases/tags/v$v")
+            .header("Accept", "application/vnd.github+json").header("User-Agent", "cl0udly").build()
+        val body = Graph.api.http.newCall(req).execute().use { if (!it.isSuccessful) error("GitHub: HTTP ${it.code}"); it.body.string() }
+        val o = app.cl0udly.api.OcJson.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject
+        val a = (o["assets"] as kotlinx.serialization.json.JsonArray).map { it as kotlinx.serialization.json.JsonObject }
+            .firstOrNull { (it["name"] as? kotlinx.serialization.json.JsonPrimitive)?.content == asset } ?: error("no $asset in OpenCode $v")
+        return (a["digest"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.removePrefix("sha256:") ?: error("no checksum for $asset")
     }
 
     /**

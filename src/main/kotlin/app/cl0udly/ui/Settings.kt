@@ -654,8 +654,8 @@ private fun CodeSettings() {
         SettingRow("Show files the agent edits", "Opens Changes when a session edits files.", last = true) { Switch(prefs.autoOpenFiles) { prefs.autoOpenFiles = it } }
     }
     Group("Terminal") {
-        SettingRow("Shell", "Empty uses \$SHELL.", last = true) {
-            Field(prefs.terminalShell, { prefs.terminalShell = it }, System.getenv("SHELL") ?: "/bin/bash", Modifier.width(220.dp).clip(Oc.round(8.dp)).border(1.dp, c.border, Oc.round(8.dp)).padding(10.dp), size = 14)
+        SettingRow("Shell", "Empty uses the system shell.", last = true) {
+            Field(prefs.terminalShell, { prefs.terminalShell = it }, app.cl0udly.data.Os.defaultShell, Modifier.width(220.dp).clip(Oc.round(8.dp)).border(1.dp, c.border, Oc.round(8.dp)).padding(10.dp), size = 14)
         }
     }
     Group("Remote Control") {
@@ -705,7 +705,7 @@ private fun DesktopApp() {
         SettingRow("Start with the session", "Opens cl0udly when you log in.") {
             Switch(prefs.runOnStartup) { prefs.runOnStartup = it; app.cl0udly.data.Desktop.runOnStartup(it) }
         }
-        SettingRow("Keep the computer awake", "While the agent works (systemd-inhibit).") { Switch(prefs.keepAwake) { prefs.keepAwake = it } }
+        SettingRow("Keep the computer awake", "While the agent works.") { Switch(prefs.keepAwake) { prefs.keepAwake = it } }
         SettingRow("Quick entry", "Ask from anywhere in the window.", last = true) { Txt("Ctrl+Shift+Space", size = 13.sp, family = Oc.mono, color = c.textDim) }
     }
     Group("Storage") {

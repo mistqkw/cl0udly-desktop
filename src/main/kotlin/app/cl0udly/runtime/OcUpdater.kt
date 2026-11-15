@@ -62,7 +62,7 @@ class OcUpdater(private val prefs: Prefs, private val runtime: RuntimeController
             busy = "OpenCode $v is waiting for the chats to finish"
             waitQuiet()
             busy = "Testing OpenCode $v…"
-            val why = withContext(Dispatchers.IO) { smoke(File(dir, "opencode"), v) }
+            val why = withContext(Dispatchers.IO) { smoke(File(dir, app.cl0udly.data.Os.ocExe), v) }
             if (why != null) {
                 dir.deleteRecursively()
                 prefs.ocSkip = v; prefs.ocUpdateError = "OpenCode $v stays off: ${app.cl0udly.data.I18n.t(why)}"
@@ -111,7 +111,7 @@ class OcUpdater(private val prefs: Prefs, private val runtime: RuntimeController
             val v = o.str("tag_name")?.removePrefix("v") ?: return@mapNotNull null
             if (!Regex("""\d+\.\d+\.\d+""").matches(v) || v.substringBefore('.') != major) return@mapNotNull null
             if (v == prefs.ocSkip || !newer(v, runtime.version)) return@mapNotNull null
-            val asset = (o["assets"] as? JsonArray)?.map { it.jsonObject }?.firstOrNull { it.str("name") == "opencode-linux-x64.tar.gz" } ?: return@mapNotNull null
+            val asset = (o["assets"] as? JsonArray)?.map { it.jsonObject }?.firstOrNull { it.str("name") == app.cl0udly.data.Os.ocAsset } ?: return@mapNotNull null
             val sha = asset.str("digest")?.removePrefix("sha256:") ?: return@mapNotNull null
             Triple(v, asset.str("browser_download_url") ?: return@mapNotNull null, sha)
         }.maxWithOrNull { a, b -> if (newer(a.first, b.first)) 1 else if (a.first == b.first) 0 else -1 }

@@ -473,9 +473,9 @@ private class Term(val dir: String) {
     val widget = JediTermWidget(100, 30, Settings())
 
     init {
-        val shell = Graph.prefs.terminalShell.ifBlank { System.getenv("SHELL") ?: "/bin/bash" }
+        val shell = Graph.prefs.terminalShell.ifBlank { app.cl0udly.data.Os.defaultShell }
         val env = HashMap(System.getenv()).apply { put("TERM", "xterm-256color"); put("COLORTERM", "truecolor"); put("CL0UDLY", "1") }
-        val p = PtyProcessBuilder(arrayOf(shell, "-l")).setDirectory(dir).setEnvironment(env).setInitialColumns(100).setInitialRows(30).start()
+        val p = PtyProcessBuilder(if (app.cl0udly.data.Os.isWindows) arrayOf(shell) else arrayOf(shell, "-l")).setDirectory(dir).setEnvironment(env).setInitialColumns(100).setInitialRows(30).start()
         widget.ttyConnector = PtyConnector(p)
         // a thin scrollbar in the look's colors instead of Swing's blue one
         scrollBars(widget).forEach { bar ->

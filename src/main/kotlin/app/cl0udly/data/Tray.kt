@@ -43,6 +43,7 @@ object Tray {
 
     fun start(open: () -> Unit, quick: () -> Unit, quit: () -> Unit) {
         onOpen = open; onQuick = quick; onQuit = quit
+        if (!Os.isLinux) return awtStart()
         Thread({
             runCatching {
                 val c = DBusConnectionBuilder.forSessionBus().build()
@@ -64,7 +65,34 @@ object Tray {
         }, "tray").apply { isDaemon = true }.start()
     }
 
-    fun stop() { runCatching { conn?.close() }; conn = null; active = false }
+    fun stop() {
+        runCatching { conn?.close() }; conn = null
+        awtIcon?.let { i -> runCatching { java.awt.SystemTray.getSystemTray().remove(i) } }; awtIcon = null
+        active = false
+    }
+
+    // ---------- Windows and macOS: the system tray of AWT ----------
+
+    private var awtIcon: java.awt.TrayIcon? = null
+
+    private fun awtStart() = java.awt.EventQueue.invokeLater {
+        runCatching {
+            if (!java.awt.SystemTray.isSupported()) return@runCatching
+            val img = javax.imageio.ImageIO.read(Tray::class.java.getResourceAsStream("/icon.png"))
+            val menu = java.awt.PopupMenu().apply {
+                add(java.awt.MenuItem("Show App").apply { addActionListener { onOpen() } })
+                add(java.awt.MenuItem("Open Quick Entry").apply { addActionListener { onQuick() } })
+                addSeparator()
+                add(java.awt.MenuItem("Quit").apply { addActionListener { onQuit() } })
+            }
+            val icon = java.awt.TrayIcon(img, "cl0udly", menu).apply { isImageAutoSize = true; addActionListener { onOpen() } }
+            java.awt.SystemTray.getSystemTray().add(icon)
+            awtIcon = icon; active = true
+        }.onFailure { System.err.println("tray: $it") }
+    }
+
+    /** A notification from the tray icon (Windows shows it as a toast). */
+    fun balloon(title: String, text: String) { awtIcon?.displayMessage(title, text, java.awt.TrayIcon.MessageType.NONE) }
 
     // ---------- the icon ----------
 

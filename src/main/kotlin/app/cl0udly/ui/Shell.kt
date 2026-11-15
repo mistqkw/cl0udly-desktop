@@ -579,7 +579,7 @@ private fun ServerBanner(modifier: Modifier) {
 }
 
 fun openFolder(dir: String) {
-    runCatching { ProcessBuilder("xdg-open", dir).start() }
+    app.cl0udly.data.Os.open(dir)
 }
 
 @Composable

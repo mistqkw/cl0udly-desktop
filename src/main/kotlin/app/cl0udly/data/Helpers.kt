@@ -134,16 +134,25 @@ object Helpers {
 
     /**
      * Where the agent is: on the phone it knows from the phone tools; here it is told it runs on the
-     * user's own Linux computer, with what that allows, so it doesn't act like it's in a sandbox.
+     * user's own computer, with what that allows, so it doesn't act like it's in a sandbox.
      */
     private fun place(): String {
         val home = System.getProperty("user.home")
         val de = System.getenv("XDG_CURRENT_DESKTOP").orEmpty().ifBlank { System.getenv("DESKTOP_SESSION").orEmpty() }
-        val os = runCatching { File("/etc/os-release").readLines().firstOrNull { it.startsWith("PRETTY_NAME=") }?.substringAfter('=')?.trim('"') }.getOrNull() ?: "Linux"
+        val os = when {
+            Os.isWindows -> System.getProperty("os.name")
+            Os.isMac -> "macOS " + System.getProperty("os.version")
+            else -> runCatching { File("/etc/os-release").readLines().firstOrNull { it.startsWith("PRETTY_NAME=") }?.substringAfter('=')?.trim('"') }.getOrNull() ?: "Linux"
+        }
+        val tools = when {
+            Os.isWindows -> "Use normal Windows tools in PowerShell (Start-Process opens a file or link for the user). "
+            Os.isMac -> "Use normal macOS tools (open opens a file or link for the user, osascript -e 'display notification \"…\"' shows a notification). "
+            else -> "Use normal Linux tools (xdg-open opens a file or link for the user, notify-send shows a notification). "
+        }
         return "## Where you are\nYou run in cl0udly for desktop, on the user's own computer: $os" + (if (de.isNotBlank()) ", desktop $de" else "") +
             ", user ${System.getProperty("user.name")}, home $home. It is not a sandbox and not a phone: commands run for real on this machine, " +
             "files you write stay on it, the user sees your work in the app's panels (files, terminal, browser). " +
-            "Use normal Linux tools (xdg-open opens a file or link for the user, notify-send shows a notification). " +
+            tools +
             "Ask before anything that touches the system itself (sudo, packages, services, deleting outside the project).\n" +
             "You can manage your helper subagents yourself: edit ${teamFile.absolutePath} (members: name, role, model \"provider/model\", on true|false; max). " +
             "Add, rename, switch off or change a helper's model there; it applies from the next message. Tell the user what you changed."

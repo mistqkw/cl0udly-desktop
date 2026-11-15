@@ -2,38 +2,71 @@ package app.cl0udly.data
 
 import java.io.File
 
-/** Small bits of the Linux desktop: notifications, staying awake, starting with the session. */
+/** Small bits of the desktop: notifications, staying awake, starting with the session (Linux, Windows, macOS). */
 object Desktop {
     /** Whether the window has focus (set by Main): no notifications while you're looking at it. */
     @Volatile var focused = true
     private var inhibitor: Process? = null
 
     fun notify(title: String, body: String) {
-        runCatching { ProcessBuilder("notify-send", "-a", "cl0udly", "-i", "cl0udly", title, body.take(240)).start() }
+        runCatching {
+            when {
+                // Windows: a balloon from the tray icon; macOS: Notification Center through AppleScript
+                Os.isWindows -> Tray.balloon(title, body.take(240))
+                Os.isMac -> ProcessBuilder("osascript", "-e", "display notification ${appleQuote(body.take(240))} with title ${appleQuote(title)}").start()
+                else -> ProcessBuilder("notify-send", "-a", "cl0udly", "-i", "cl0udly", title, body.take(240)).start()
+            }
+        }
     }
+
+    private fun appleQuote(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
     /** While the agent works the computer doesn't fall asleep (systemd-inhibit, like Claude's "Keep computer awake"). */
     @Synchronized fun inhibit(on: Boolean) {
         if (on && inhibitor?.isAlive != true) {
+            val pid = ProcessHandle.current().pid()
             inhibitor = runCatching {
                 // it waits on our own pid, not forever: if cl0udly dies the lock goes with it
-                ProcessBuilder("systemd-inhibit", "--what=idle:sleep", "--who=cl0udly", "--why=The agent is working",
-                    "tail", "--pid=${ProcessHandle.current().pid()}", "-f", "/dev/null").start()
+                when {
+                    Os.isMac -> ProcessBuilder("caffeinate", "-i", "-w", "$pid").start()
+                    // Windows: a PowerShell that keeps the system awake (SetThreadExecutionState) while we live
+                    Os.isWindows -> ProcessBuilder(
+                        "powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
+                        "\$s='[DllImport(\"kernel32.dll\")]public static extern uint SetThreadExecutionState(uint f);';" +
+                            "\$t=Add-Type -MemberDefinition \$s -Name P -Namespace W -PassThru;\$t::SetThreadExecutionState(0x80000001)|Out-Null;Wait-Process -Id $pid",
+                    ).start()
+                    else -> ProcessBuilder("systemd-inhibit", "--what=idle:sleep", "--who=cl0udly", "--why=The agent is working",
+                        "tail", "--pid=$pid", "-f", "/dev/null").start()
+                }
             }.getOrNull()
         } else if (!on) { inhibitor?.destroy(); inhibitor = null }
     }
 
-    private val autostart = File(System.getProperty("user.home"), ".config/autostart/cl0udly.desktop")
+    private val home = System.getProperty("user.home")
+    private val autostart = when {
+        Os.isWindows -> File(System.getenv("APPDATA") ?: "$home\\AppData\\Roaming", "Microsoft\\Windows\\Start Menu\\Programs\\Startup\\cl0udly.cmd")
+        Os.isMac -> File(home, "Library/LaunchAgents/app.cl0udly.plist")
+        else -> File(home, ".config/autostart/cl0udly.desktop")
+    }
     val startsWithSession get() = autostart.exists()
 
     fun runOnStartup(on: Boolean) {
         if (!on) { autostart.delete(); return }
-        val exe = File(System.getProperty("user.home"), ".local/share/cl0udly-app/bin/cl0udly")
+        // the program that is running now: wherever it was installed
+        val exe = ProcessHandle.current().info().command().orElse(null)?.takeIf { !it.endsWith("java") && !it.endsWith("java.exe") }
+            ?: File(home, ".local/share/cl0udly-app/bin/cl0udly").absolutePath
         autostart.parentFile.mkdirs()
-        autostart.writeText("[Desktop Entry]\nType=Application\nName=cl0udly\nExec=${exe.absolutePath}\nIcon=cl0udly\nX-GNOME-Autostart-enabled=true\n")
+        autostart.writeText(when {
+            Os.isWindows -> "@start \"\" \"$exe\"\r\n"
+            Os.isMac -> """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>Label</key><string>app.cl0udly</string><key>ProgramArguments</key><array><string>$exe</string></array><key>RunAtLoad</key><true/></dict></plist>
+"""
+            else -> "[Desktop Entry]\nType=Application\nName=cl0udly\nExec=$exe\nIcon=cl0udly\nX-GNOME-Autostart-enabled=true\n"
+        })
     }
 
-    fun open(target: String) { runCatching { ProcessBuilder("xdg-open", target).start() } }
+    fun open(target: String) = Os.open(target)
 
     /** The address other devices on the network reach this computer at. */
     /**
