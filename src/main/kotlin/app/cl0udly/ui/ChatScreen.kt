@@ -1,5 +1,11 @@
 package app.cl0udly.ui
 
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.Key
@@ -29,6 +35,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -65,6 +72,7 @@ import app.cl0udly.api.QuestionReq
 import app.cl0udly.api.obj
 import app.cl0udly.api.str
 import app.cl0udly.data.ChatMessage
+import app.cl0udly.data.Helpers
 import app.cl0udly.ui.cloud.CloudThinking
 import app.cl0udly.ui.kit.Ic
 import app.cl0udly.ui.kit.Icon
@@ -85,15 +93,46 @@ fun ChatScreen(id: String) {
     val busy = hub.statuses[id] != null
     val list = rememberLazyListState()
     val atBottom by remember { derivedStateOf { list.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= list.layoutInfo.totalItemsCount - 2 } ?: true } }
-    // follow the reply while it grows, unless the user scrolled up to read
+    // at the very bottom it follows the reply as it grows (every frame, so the typed-out text too);
+    // scrolled up to read, it stays put and a "down" button shows
+    var stick by remember(id) { mutableStateOf(true) }
+    var auto by remember { mutableStateOf(false) }
     LaunchedEffect(id) {
-        snapshotFlow { chat.messages.size to chat.messages.lastOrNull()?.parts?.sumOf { it.text.length } }.collect {
-            if (atBottom && list.layoutInfo.totalItemsCount > 0) list.scrollToItem(list.layoutInfo.totalItemsCount - 1, Int.MAX_VALUE / 2)
+        snapshotFlow { list.isScrollInProgress }.collect { if (!it && !auto) stick = !list.canScrollForward }
+    }
+    LaunchedEffect(id) {
+        while (true) {
+            withFrameNanos { }
+            if (stick && list.canScrollForward) {
+                auto = true
+                runCatching {
+                    val info = list.layoutInfo
+                    val last = info.visibleItemsInfo.lastOrNull()
+                    if (last == null || last.index < info.totalItemsCount - 2) list.scrollToItem(info.totalItemsCount - 1, Int.MAX_VALUE / 2)
+                    else list.scrollBy(maxOf(2f, (last.offset + last.size - info.viewportEndOffset) * 0.4f))
+                }
+                auto = false
+            }
         }
     }
-    val perm = hub.permissions.firstOrNull { it.sessionID == id }
+    // the chat's own requests first, then its helpers' (they would wait unseen otherwise)
+    val perm = hub.permissions.firstOrNull { it.sessionID == id } ?: hub.permissions.firstOrNull { it.sessionID != id && hub.rootOf(it.sessionID) == id }
     val question = hub.questions.firstOrNull { it.sessionID == id }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val links = remember {
+        object : androidx.compose.ui.platform.UriHandler {
+            override fun openUri(uri: String) {
+                val path = localPath(uri) ?: uri.takeIf { it.startsWith("/") || it.startsWith("~/") }?.replaceFirst("~", System.getProperty("user.home"))
+                when {
+                    path != null && java.io.File(path).isFile -> if (Images.isImageSrc(path)) Lightbox.src = path else FileView.open(path)
+                    path != null && java.io.File(path).isDirectory -> app.cl0udly.data.Desktop.open(path)
+                    path != null -> hub.toasts.tryEmit("File not found: $path")
+                    else -> Nav.openUrl(uri)
+                }
+            }
+        }
+    }
+    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalUriHandler provides links) {
+    BoxWithConstraints(Modifier.fillMaxSize().fileDrop()) {
         val col = minOf(if (Graph.prefs.transcriptWidth == "wide") 1240.dp else M.column, maxWidth - 64.dp)
         Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -109,69 +148,117 @@ fun ChatScreen(id: String) {
                         item { Spacer(Modifier.height(24.dp)) }
                     }
                 }
+                val scope = rememberCoroutineScope()
+                androidx.compose.animation.AnimatedVisibility(
+                    !stick, Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+                    enter = androidx.compose.animation.fadeIn(tween(140)) + androidx.compose.animation.scaleIn(tween(140), initialScale = 0.8f),
+                    exit = androidx.compose.animation.fadeOut(tween(140)) + androidx.compose.animation.scaleOut(tween(140), targetScale = 0.8f),
+                ) {
+                    Box(
+                        Modifier.size(36.dp).clip(CircleShape).background(c.surfaceHigh).border(1.dp, c.border, CircleShape)
+                            .hoverTap(CircleShape) { stick = true; scope.launch { auto = true; list.animateScrollToItem(maxOf(0, list.layoutInfo.totalItemsCount - 1), Int.MAX_VALUE / 2); auto = false } },
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Ic.ArrowDown, 18.dp, c.text) }
+                }
                 if (chat.loading && chat.messages.isEmpty()) Txt("Loading…", color = c.textDim, modifier = Modifier.align(Alignment.Center))
                 chat.loadError?.let { Txt(it, color = c.danger, modifier = Modifier.align(Alignment.Center)) }
                 androidx.compose.foundation.VerticalScrollbar(
                     androidx.compose.foundation.rememberScrollbarAdapter(list),
-                    Modifier.align(Alignment.CenterEnd).fillMaxSize().padding(end = 3.dp, top = 4.dp, bottom = 4.dp).width(8.dp),
+                    Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(end = 3.dp, top = 4.dp, bottom = 4.dp).width(8.dp),
                     style = androidx.compose.foundation.defaultScrollbarStyle().copy(unhoverColor = c.border, hoverColor = c.textDim, thickness = 6.dp),
                 )
             }
-            Box(Modifier.width(col + M.composerExtra * 2).padding(bottom = 14.dp, top = 6.dp)) {
+            Column(Modifier.width(col + M.composerExtra * 2).padding(bottom = 14.dp, top = 6.dp)) {
+                HelperClouds(id)
                 when {
-                    perm != null -> PermissionPanel(perm)
+                    perm != null && perm.permission == "task" -> TaskPermissionPanel(perm)
+                    perm != null -> {
+                        val agent = if (perm.sessionID != id) hub.session(perm.sessionID)?.agent ?: hub.session(perm.sessionID)?.title?.substringAfter("(@")?.substringBefore(" ") else null
+                        PermissionPanel(perm, agent?.let(Helpers::label) ?: if (perm.sessionID != id) Helpers.label(null) else null, agent.orEmpty())
+                    }
                     question != null -> QuestionPanel(question)
-                    else -> Composer(big = false, busy = busy, onSend = { t -> Graph.scope.launchIt { hub.send(id, t) } }, onStop = { hub.stop(id) }, placeholder = if (busy) "Add to the queue…" else "Reply to cl0udly")
+                    else -> Composer(big = false, busy = busy, onSend = { t, files -> Graph.scope.launchIt { hub.send(id, t, files) } }, onStop = { hub.stop(id) }, placeholder = if (busy) "Add to the queue…" else "Reply to cl0udly")
                 }
             }
         }
+    }
     }
 }
 
 fun kotlinx.coroutines.CoroutineScope.launchIt(block: suspend () -> Unit) = launch { block() }
 
+/** Your message: pictures and files first (like Claude), the text bubble under them. */
 @Composable
-private fun UserMessage(m: ChatMessage) {
+private fun UserMessage(m: ChatMessage) = Column(Modifier.fillMaxWidth()) { UserMessageBody(m) }
+
+@Composable
+private fun UserMessageBody(m: ChatMessage) {
     val c = Oc.c
     val text = m.parts.filter { it.type == "text" && it.raw["synthetic"]?.let { s -> (s as? JsonPrimitive)?.contentOrNull } != "true" }.joinToString("\n") { it.text }
+    val files = m.parts.filter { it.type == "file" }
+    val pics = files.mapNotNull { f -> f.raw.str("url")?.takeIf { Images.isImageSrc(it, f.raw.str("mime")) } }
+    val others = files.filter { f -> f.raw.str("url")?.let { Images.isImageSrc(it, f.raw.str("mime")) } != true }
+    if (files.isNotEmpty()) Column(Modifier.fillMaxWidth().padding(top = 20.dp), horizontalAlignment = if (Oc.look.user == "plain") Alignment.Start else Alignment.End) {
+        ImageStrip(pics)
+        if (others.isNotEmpty()) Row(Modifier.padding(top = if (pics.isEmpty()) 0.dp else 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            others.forEach { f -> FileChip(f.raw.str("filename") ?: "file", f.raw.str("mime") == "application/x-directory", localPath(f.raw.str("url"))) }
+        }
+    }
+    if (text.isBlank() && files.isNotEmpty()) { Spacer(Modifier.height(22.dp)); return }
     when (Oc.look.user) {
         "plain" -> Column(Modifier.fillMaxWidth().padding(vertical = 14.dp)) {
             Txt("You", size = 13.sp, color = c.accent, weight = FontWeight.SemiBold, family = Oc.label)
             Spacer(Modifier.height(6.dp))
-            Txt(text, size = M.body, lineHeight = M.bodyLine)
+            Txt(text, size = M.body, lineHeight = M.bodyLine, raw = true)
         }
-        else -> Box(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 22.dp), contentAlignment = Alignment.CenterEnd) {
+        else -> Box(Modifier.fillMaxWidth().padding(top = if (files.isEmpty()) 20.dp else 8.dp, bottom = 22.dp), contentAlignment = Alignment.CenterEnd) {
             val shape = Oc.round(M.bubbleRadius)
             val line = Oc.look.user == "line"
             Box(
                 Modifier.widthIn(max = M.bubbleMax).clip(shape)
                     .then(if (line) Modifier.border(1.dp, c.border, shape) else Modifier.background(c.userBubble))
                     .padding(horizontal = 20.dp, vertical = 16.dp),
-            ) { Txt(text, size = M.body, lineHeight = M.bodyLine) }
+            ) { Txt(text, size = M.body, lineHeight = M.bodyLine, raw = true) }
         }
     }
 }
 
 /** One reply: steps (thoughts and tools) fold into a line, the text is markdown, actions show on hover. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun AssistantMessage(m: ChatMessage) {
+internal fun AssistantMessage(m: ChatMessage) {
     val c = Oc.c
     val hover = remember { MutableInteractionSource() }
     val hovered by hover.collectIsHoveredAsState()
     val groups = remember(m.parts.toList()) { group(m.parts) }
+    val live = m.info.time.completed == null
     Column(Modifier.fillMaxWidth().hoverable(hover).padding(bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(M.paragraphGap)) {
         groups.forEach { g ->
             when (g) {
-                is Group.Text -> Markdown(g.text)
+                // a live reply is typed out word by word and the block grows smoothly, like Claude's
+                is Group.Text -> if (live) Box(Modifier.animateContentSize(androidx.compose.animation.core.spring(stiffness = 900f))) { Markdown(smoothText(g.text, true)) }
+                    else Markdown(g.text)
                 is Group.Steps -> Steps(g.parts)
+                is Group.Remember -> RememberCard(g.part)
             }
         }
         m.info.errorMessage?.takeIf { m.info.errorName != "MessageAbortedError" }?.let {
-            Row(Modifier.clip(Oc.round(10.dp)).background(c.danger.copy(alpha = 0.12f)).padding(horizontal = 14.dp, vertical = 10.dp)) {
+            if (app.cl0udly.data.Limits.isLimit(m.info.errorName, it)) LimitCard(it, m.info.sessionID)
+            else Row(Modifier.clip(Oc.round(10.dp)).background(c.danger.copy(alpha = 0.12f)).padding(horizontal = 14.dp, vertical = 10.dp)) {
                 Txt(it, size = 14.sp, color = c.danger)
             }
         }
         val text = groups.filterIsInstance<Group.Text>().joinToString("\n\n") { it.text }
+        val pics = remember(text, m.parts.size) { picturesIn(m, text) }
+        val docs = remember(text, m.parts.size, m.info.time.completed) { if (m.info.time.completed == null) emptyList() else filesIn(m, text) }
+        // pictures, videos and sounds as small square tiles in a row, other files as cards (as on the phone)
+        val media = docs.filter { isMedia(it) }
+        if (pics.isNotEmpty() || media.isNotEmpty()) androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            pics.forEach { ImageTile(it) }
+            media.forEach { MediaTile(it) }
+        }
+        val rest = docs.filterNot { isMedia(it) }
+        if (rest.isNotEmpty()) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { rest.forEach { FileCard(it) } }
         if (text.isNotBlank() && m.info.time.completed != null) Row(
             Modifier.graphicsLayer { alpha = if (hovered) 1f else 0f }.height(30.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -184,9 +271,65 @@ private fun AssistantMessage(m: ChatMessage) {
     }
 }
 
+/** A sent file or folder under the message: an icon and its name. */
+@Composable
+private fun FileChip(name: String, folder: Boolean, path: String?) {
+    val c = Oc.c
+    val open = path?.let { p -> { if (folder) app.cl0udly.data.Desktop.open(p) else FileView.open(p) } }
+    Row(
+        Modifier.height(40.dp).clip(Oc.round(10.dp)).border(1.dp, c.border, Oc.round(10.dp))
+            .then(if (open != null) Modifier.hoverTap(Oc.round(10.dp), onClick = open) else Modifier).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(if (folder) Ic.Folder else iconFor(name), 15.dp, c.textDim)
+        Spacer(Modifier.width(8.dp))
+        Txt(name, size = 13.sp, maxLines = 1, modifier = Modifier.widthIn(max = 220.dp))
+    }
+}
+
+/** A file part's address as a path on this computer (file:// only). */
+private fun localPath(url: String?): String? = url?.takeIf { it.startsWith("file:") }?.let { runCatching { java.io.File(java.net.URI(it)).path }.getOrNull() }
+
+/**
+ * Files the agent points to (not pictures, those show above): its own file parts and absolute paths in
+ * the text — a link `[name](/path)`, `/path` in backticks or alone on a line — that exist on this computer.
+ */
+private fun filesIn(m: ChatMessage, text: String): List<String> {
+    val out = LinkedHashSet<String>()
+    m.parts.filter { it.type == "file" }.forEach { f -> localPath(f.raw.str("url"))?.takeIf { !Images.isImageSrc(it, f.raw.str("mime")) }?.let(out::add) }
+    listOf(Regex("""]\(((?:/|~/|file:)[^)\s]+)\)"""), Regex("""`((?:/|~/)[^`\s]+)`"""), Regex("""(?m)^\s*((?:/|~/)[^\s`*]+)\s*$""")).forEach { re ->
+        re.findAll(text).forEach { out.add(it.groupValues[1].trimEnd('.', ',', ';', ':').let { p -> localPath(p) ?: p.replaceFirst("~", System.getProperty("user.home")) }) }
+    }
+    // what it made with its write tool: documents, media, archives (not the code it edits)
+    m.parts.filter { it.type == "tool" && it.raw.str("tool") == "write" }.forEach { p ->
+        p.raw.obj("state")?.obj("input")?.str("filePath")?.takeIf { it.substringAfterLast('.').lowercase() in HANDOUT && !it.substringAfterLast('/').startsWith("README", true) }?.let(out::add)
+    }
+    return out.filter { val f = java.io.File(it); f.isFile && !Images.isImageSrc(it) }.take(8)
+}
+
+private val HANDOUT = setOf(
+    "pdf", "mp3", "wav", "ogg", "flac", "m4a", "mp4", "webm", "mov", "zip", "tar", "gz", "7z", "apk",
+    "docx", "xlsx", "pptx", "odt", "ods", "csv", "epub", "html", "txt", "md",
+)
+
+/**
+ * Pictures the agent shows: its own file parts, Markdown images, and paths to picture files it
+ * mentions (it saved a picture and named it). Only files that exist on this computer.
+ */
+private fun picturesIn(m: ChatMessage, text: String): List<String> {
+    val out = LinkedHashSet<String>()
+    m.parts.filter { it.type == "file" }.forEach { f -> f.raw.str("url")?.takeIf { Images.isImageSrc(it, f.raw.str("mime")) }?.let(out::add) }
+    Regex("""!\[[^\]]*]\(([^)\s]+)\)""").findAll(text).forEach { out.add(it.groupValues[1].removePrefix("file://")) }
+    Regex("""(?<![\w/.])((?:/|~/)[^\s`'"()<>\[\]]+\.(?:png|jpe?g|gif|webp|bmp))""", RegexOption.IGNORE_CASE).findAll(text).forEach {
+        out.add(it.groupValues[1].replaceFirst("~", System.getProperty("user.home")))
+    }
+    return out.filter { it.startsWith("data:") || java.io.File(it).isFile }.take(8)
+}
+
 private sealed interface Group {
     data class Text(val text: String) : Group
     data class Steps(val parts: List<Part>) : Group
+    data class Remember(val part: Part) : Group
 }
 
 private fun group(parts: List<Part>): List<Group> {
@@ -197,7 +340,7 @@ private fun group(parts: List<Part>): List<Group> {
         when (p.type) {
             "text" -> if (p.text.isNotBlank()) { flush(); out.add(Group.Text(p.text)) }
             "reasoning" -> if (p.text.isNotBlank()) steps.add(p)
-            "tool" -> steps.add(p)
+            "tool" -> if (p.raw.str("tool") == "remember") { flush(); out.add(Group.Remember(p)) } else steps.add(p)
         }
     }
     flush()
@@ -357,11 +500,14 @@ private fun SpinDots() {
 // ---------- the agent asks ----------
 
 @Composable
-private fun PermissionPanel(r: PermissionReq) {
+internal fun PermissionPanel(r: PermissionReq, helper: String? = null, helperKey: String = "") {
     val c = Oc.c
     Column(
         Modifier.fillMaxWidth().clip(Oc.round(M.composerRadius)).background(c.surface).border(1.dp, c.accent.copy(alpha = 0.5f), Oc.round(M.composerRadius)).padding(18.dp),
     ) {
+        if (helper != null) Row(Modifier.padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            HelperGlyph("asking", 22.dp, helperKey); Spacer(Modifier.width(8.dp)); Txt("$helper asks", size = 13.sp, color = c.accent)
+        }
         Txt("Allow ${r.permission}?", size = 16.sp, weight = FontWeight.SemiBold)
         val what = r.patterns.joinToString("\n").ifBlank { r.metadata.str("command") ?: r.metadata.str("filepath") ?: "" }
         if (what.isNotBlank()) {
@@ -454,3 +600,71 @@ private fun QuestionPanel(q: QuestionReq) {
         }
     }
 }
+
+/**
+ * The reply as it should look right now: new text comes out at a steady pace (faster when it falls
+ * behind, so it catches up within ~0.15 s) instead of in the server's lumps, and words come out whole,
+ * so a half-typed word never jumps to the next line. The phone's copy works the same way.
+ */
+@Composable
+private fun smoothText(target: String, live: Boolean): String {
+    val latest = rememberUpdatedState(target)
+    var shown by remember { mutableIntStateOf(if (live) 0 else target.length) }
+    LaunchedEffect(Unit) {
+        var acc = 0f
+        var lastT = 0L
+        while (true) {
+            if (shown >= latest.value.length) {
+                if (shown > latest.value.length) shown = latest.value.length
+                snapshotFlow { latest.value.length }.first { it > shown }
+                lastT = 0L; acc = 0f
+            }
+            val t = withFrameNanos { it }
+            val dt = if (lastT == 0L) 1f / 60 else ((t - lastT) / 1e9f).coerceAtMost(0.05f)
+            lastT = t
+            acc += maxOf(260f, (latest.value.length - shown) / 0.15f) * dt
+            val n = acc.toInt()
+            if (n > 0) { acc -= n; shown = minOf(latest.value.length, shown + n) }
+        }
+    }
+    val words by remember {
+        derivedStateOf {
+            val t = latest.value
+            if (shown >= t.length) t else {
+                var e = shown
+                while (e < t.length && !t[e].isWhitespace()) e++
+                t.substring(0, e)
+            }
+        }
+    }
+    return words
+}
+
+/**
+ * The model's allowance ran out: not a red error but what happened and a way on: another free
+ * model, with the last message sent to it again.
+ */
+@Composable
+private fun LimitCard(message: String, sessionId: String) {
+    val c = Oc.c
+    val scope = rememberCoroutineScope()
+    val next = remember { app.cl0udly.data.Limits.nextFree() }
+    var details by remember { mutableStateOf(false) }
+    Column(Modifier.widthIn(max = 560.dp).clip(Oc.round(12.dp)).background(c.surface).border(1.dp, c.border, Oc.round(12.dp)).padding(16.dp)) {
+        Txt("This model's limit is used up for now", size = 15.sp, weight = FontWeight.Medium)
+        Txt("Free models have their own daily allowance on OpenCode's side. Another model usually still works, and this one comes back later.", size = 14.sp, color = c.textDim, modifier = Modifier.padding(top = 6.dp))
+        Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (next != null) Button("Go on with ${next.label}") {
+                val p = Graph.prefs
+                p.providerId = next.provider.id; p.modelId = next.model.id; p.variant = ""
+                val last = Graph.hub.chat(sessionId).messages.lastOrNull { it.info.isUser }
+                val text = last?.parts?.filter { it.type == "text" && it.raw.str("synthetic") != "true" }?.joinToString("\n") { it.text }.orEmpty()
+                if (text.isNotBlank()) scope.launch { Graph.hub.send(sessionId, text) }
+            }
+            Spacer(Modifier.width(12.dp))
+            Txt(if (details) "Hide details" else "Details", size = 13.sp, color = c.textDim, modifier = Modifier.hoverTap(Oc.round(6.dp)) { details = !details }.padding(4.dp))
+        }
+        if (details) Txt(message, size = 13.sp, color = c.textDim, modifier = Modifier.padding(top = 8.dp))
+    }
+}
+

@@ -39,7 +39,7 @@ class Chat(val id: String, private val api: OpenCodeApi) {
     var live = false
 
     /** Shows a sent message right away, before the server confirms it. */
-    fun addLocalUser(text: String): String {
+    fun addLocalUser(text: String, files: List<JsonObject> = emptyList()): String {
         val id = "zzzz-local-" + System.nanoTime()
         val raw = kotlinx.serialization.json.buildJsonObject {
             put("id", kotlinx.serialization.json.JsonPrimitive("$id-p")); put("messageID", kotlinx.serialization.json.JsonPrimitive(id))
@@ -47,6 +47,7 @@ class Chat(val id: String, private val api: OpenCodeApi) {
         }
         val m = ChatMessage(id, MessageInfo(id = id, sessionID = this.id, role = "user", time = TimeInfo(created = System.currentTimeMillis())))
         m.parts.add(Part(raw))
+        files.forEachIndexed { i, f -> m.parts.add(Part(kotlinx.serialization.json.JsonObject(f + mapOf("id" to kotlinx.serialization.json.JsonPrimitive("$id-f$i"), "messageID" to kotlinx.serialization.json.JsonPrimitive(id))))) }
         messages.add(m)
         return id
     }

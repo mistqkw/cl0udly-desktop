@@ -41,6 +41,8 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.layout.positionOnScreen
+import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -99,6 +101,7 @@ fun Pop(
     minWidth: Dp = 220.dp,
     focusable: Boolean = true,
     onKey: ((androidx.compose.ui.input.key.KeyEvent) -> Boolean)? = null,
+    onBounds: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     if (!open) return
@@ -126,6 +129,7 @@ fun Pop(
                 .clip(Oc.round(12.dp)).background(c.surface).border(1.dp, c.border, Oc.round(12.dp))
                 .then(if (width != null) Modifier.width(width) else Modifier.widthIn(min = minWidth, max = 420.dp))
                 .heightIn(max = 560.dp)
+                .then(if (onBounds != null) Modifier.onGloballyPositioned { onBounds(androidx.compose.ui.geometry.Rect(it.positionOnScreen(), it.size.toSize())) } else Modifier)
                 .verticalScroll(rememberScrollState())
                 .padding(5.dp),
         ) { content() }
@@ -152,11 +156,29 @@ fun PopItem(
     val c = Oc.c
     val col = when { !enabled -> c.textDim.copy(alpha = 0.5f); danger -> c.danger; else -> c.text }
     var subOpen by remember { mutableStateOf(false) }
+    // A submenu stays while the pointer is on its row or inside it and closes 300 ms after it leaves both.
+    // Popups get no Exit once the pointer is outside them, so the real pointer position is checked
+    // instead, in screen pixels (menus may be windows of their own).
+    var rowRect by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
+    var subRect by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
+    val density = androidx.compose.ui.platform.LocalDensity.current.density
+    LaunchedEffect(subOpen) {
+        if (!subOpen) return@LaunchedEffect
+        var seen = System.currentTimeMillis()
+        while (true) {
+            kotlinx.coroutines.delay(60)
+            val m = runCatching { java.awt.MouseInfo.getPointerInfo().location }.getOrNull() ?: continue
+            val p = Offset(m.x * density, m.y * density)
+            val now = System.currentTimeMillis()
+            if (rowRect.inflate(4f).contains(p) || subRect.inflate(4f).contains(p)) seen = now
+            else if (now - seen > 300) { subOpen = false; break }
+        }
+    }
     Box {
         Row(
             Modifier.fillMaxWidth().heightIn(min = if (sub != null) 46.dp else 34.dp)
                 .hoverTap(Oc.round(8.dp), subOpen, enabled) { if (submenu != null) subOpen = true else onClick() }
-                .then(if (submenu != null) Modifier.hoverOpens { subOpen = true } else Modifier)
+                .then(if (submenu != null) Modifier.onGloballyPositioned { rowRect = androidx.compose.ui.geometry.Rect(it.positionOnScreen(), it.size.toSize()) }.hoverOpens { subOpen = true } else Modifier)
                 .padding(horizontal = 10.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -171,7 +193,7 @@ fun PopItem(
             if (checked) { Spacer(Modifier.width(12.dp)); Icon(Ic.Check, 15.dp, c.link) }
             if (submenu != null) { Spacer(Modifier.width(10.dp)); Icon(Ic.ChevronRight, 14.dp, c.textDim) }
         }
-        if (submenu != null) Pop(subOpen, { subOpen = false }, Side.Right) { submenu { subOpen = false } }
+        if (submenu != null) Pop(subOpen, { subOpen = false }, Side.Right, focusable = false, onBounds = { subRect = it }) { submenu { subOpen = false } }
     }
 }
 
@@ -185,10 +207,9 @@ fun PopHeader(text: String) =
 /** Hovering a while over a submenu row opens it, like native menus. */
 @OptIn(ExperimentalComposeUiApi::class)
 private fun Modifier.hoverOpens(open: () -> Unit): Modifier = composed {
-    var since by remember { mutableStateOf(0L) }
     var inside by remember { mutableStateOf(false) }
-    LaunchedEffect(inside) { if (inside) { kotlinx.coroutines.delay(260); if (inside) open() } }
-    onPointerEvent(PointerEventType.Enter) { inside = true; since = System.currentTimeMillis() }
+    LaunchedEffect(inside) { if (inside) { kotlinx.coroutines.delay(200); if (inside) open() } }
+    onPointerEvent(PointerEventType.Enter) { inside = true }
         .onPointerEvent(PointerEventType.Exit) { inside = false }
 }
 

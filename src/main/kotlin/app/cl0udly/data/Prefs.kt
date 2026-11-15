@@ -17,6 +17,10 @@ object Paths {
     val config = File(System.getenv("XDG_CONFIG_HOME")?.takeIf { it.isNotBlank() } ?: "$home/.config", "cl0udly")
     /** Plain chats live in their own folder, everything else is a project (Code). */
     val chats = File(data, "chats")
+    /** Our OpenCode's config folder (its XDG_CONFIG_HOME is data/opencode/config). */
+    val opencodeConfig = File(data, "opencode/config/opencode")
+    /** Memory: notes the agent keeps about the user, the same layout as on the phone. */
+    val memory = File(data, "memory")
 }
 
 /** Folder of plain chats, as the server sees it. */
@@ -66,6 +70,17 @@ class Prefs(private val file: File = File(Paths.config, "prefs.json")) {
     var serverPort by str("4196")
     var serverPassword by str("")
     /** Another computer's `opencode serve` (address and password); empty means our own server. */
+    /** Dictation language for Whisper: "ru" (with English words), "en" or "auto". */
+    var voiceLang by str("ru")
+    /** Closing the window hides it to the tray (when the panel has one) instead of quitting. */
+    var closeToTray by flag(true)
+    var sounds by flag(true)
+    /** The limit window already warned about, "5-hour@<reset>". */
+    var limitWarned by str("")
+    /** system | en | ru: the app's own words. */
+    var language by str("system")
+    var trayHintShown by flag(false)
+    var seenVersion by str("")
     var remoteUrl by str("")
     var remotePassword by str("")
 
@@ -125,6 +140,11 @@ class Prefs(private val file: File = File(Paths.config, "prefs.json")) {
 
     // Remote control: the phone joins this computer's server over the local network
     var remoteControl by flag(false)
+    /** OpenCode updates: when GitHub was last asked, a version that failed its test, why, and a note for the user. */
+    var ocChecked by str("0")
+    var ocSkip by str("")
+    var ocUpdateError by str("")
+    var ocNotice by str("")
 
     // usage limits (OpenCode Go: $12 per 5 hours, $30 a week, $60 a month), counted locally
     var limit5h by str("12")
@@ -132,8 +152,53 @@ class Prefs(private val file: File = File(Paths.config, "prefs.json")) {
     var limitMonth by str("60")
     var limitProviders by str("opencode-go")
 
+    // helpers and working rules (Settings → Helpers)
+    /** Models allowed to help, "provider/model" per line. */
+    var helperModels by str("")
+    /** Of those, the ones that help without asking first. */
+    var helperAlways by str("")
+    /** Subagent names last written to the server's config, to turn off the ones dropped since. */
+    var helperApplied by str("")
+    var helperParallel by str("3")
+    /** Helpers' own names and roles: {"provider/model": {"name", "role"}}. */
+    var helperMeta by str("{}")
+    /** The team file as cl0udly last wrote it: a different text means the agent changed it. */
+    var teamFileLast by str("")
+    /** Brief replies and a check of every step, from the cl0udly-brain plugin. */
+    var brainStyle by flag(true)
+    /** Tool output longer than this many characters is cut to its head and tail; 0 keeps it whole. */
+    var brainPrune by str("8000")
+
+    // memory (Settings → Memory)
+    var memoryOn by flag(true)
+    var memoryAutoSave by flag(true)
+    /** ask | auto | off: offer facts as "Remember this?" cards, save them on its own, or only when asked. */
+    var memorySave by str("")
+    val memoryMode get() = memorySave.ifBlank { if (memoryAutoSave) "ask" else "off" }
+    /** Answers to "Remember this?" cards: callID:y|n, newest last. */
+    var memoryAnswers by str("")
+    fun memoryAnswer(call: String) = memoryAnswers.split(',').firstOrNull { it.startsWith("$call:") }?.substringAfter(':')
+    fun answerMemory(call: String, yes: Boolean) {
+        memoryAnswers = (memoryAnswers.split(',').filter { it.isNotBlank() && !it.startsWith("$call:") } + "$call:${if (yes) "y" else "n"}").takeLast(300).joinToString(",")
+    }
+    /** Chats where memory is off, one session id per line. */
+    var memoryOff by str("")
+
+    // account
+    var signedIn by str("")
+    var avatarPath by str("")
+
     val projectList: List<String> get() = projects.split('\n').filter { it.isNotBlank() }
     val pinnedList: List<String> get() = pinned.split('\n').filter { it.isNotBlank() }
+    val helperModelList get() = helperModels.lines().filter { it.isNotBlank() }
+    val helperAlwaysSet get() = helperAlways.lines().filter { it.isNotBlank() }.toSet()
+    val helperAppliedList get() = helperApplied.lines().filter { it.isNotBlank() }
+    val memoryOffSet get() = memoryOff.lines().filter { it.isNotBlank() }.toSet()
+    fun memoryOn(sessionId: String?) = memoryOn && (sessionId == null || sessionId !in memoryOffSet)
+    fun setChatMemory(sessionId: String, on: Boolean) { memoryOff = (if (on) memoryOffSet - sessionId else memoryOffSet + sessionId).joinToString("\n") }
+    fun toggleHelper(key: String) { helperModels = (if (key in helperModelList) helperModelList - key else helperModelList + key).joinToString("\n") }
+    fun setHelperAlways(key: String, on: Boolean) { helperAlways = (if (on) helperAlwaysSet + key else helperAlwaysSet - key).joinToString("\n") }
+
     fun togglePin(id: String) { pinned = (if (id in pinnedList) pinnedList - id else listOf(id) + pinnedList).joinToString("\n") }
     val recentModelList: List<String> get() = recentModels.split('\n').filter { it.isNotBlank() }
     fun useModel(key: String) { recentModels = (listOf(key) + recentModelList.filter { it != key }).take(8).joinToString("\n") }

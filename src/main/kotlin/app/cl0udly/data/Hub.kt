@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.JsonObject
 
 /** A model the user can pick: provider, model and its name for the picker. */
 data class Pick(val provider: ProviderInfo, val model: ModelInfo) {
@@ -45,6 +46,8 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
     val toasts = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** A reply finished while the window was not focused or another chat was open: the mascot cheers. */
     val finished = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    /** Chats whose task finished while you weren't looking at them: a bright blue dot until you open them. */
+    val doneUnseen = androidx.compose.runtime.mutableStateListOf<String>()
 
     var picks by mutableStateOf<List<Pick>>(emptyList())
         private set
@@ -64,6 +67,12 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
         get() = all.values.filter { it.parentID == null && it.time.archived != null }.sortedByDescending { it.time.updated }
 
     fun session(id: String) = all[id]
+
+    /** Helper sessions the agent started from [id] (OpenCode's task tool), oldest first. */
+    fun children(id: String): List<Session> = all.values.filter { it.parentID == id }.sortedBy { it.time.created }
+
+    /** The top session a helper belongs to (itself when it is one). */
+    fun rootOf(id: String): String { var cur = id; repeat(8) { cur = all[cur]?.parentID ?: return cur }; return cur }
     fun isChat(s: Session) = s.directory == CHAT_DIR
 
     fun start() {
@@ -71,6 +80,8 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
         // a reply finished while you were elsewhere: a desktop notification
         scope.launch {
             finished.collect { id ->
+                val open = (app.cl0udly.ui.Nav.screen as? app.cl0udly.ui.Screen.Chat)?.id == id
+                if (!(open && Desktop.focused) && id !in doneUnseen) doneUnseen.add(id)
                 if (prefs.notifyDone && !Desktop.focused) Desktop.notify(all[id]?.displayTitle ?: "cl0udly", "The reply is ready")
             }
         }
@@ -83,12 +94,18 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
 
     suspend fun reload() {
         runCatching {
-            val list = api.listSessions(limit = 500)
+            // OpenCode answers per project: without a folder it only knows the plain chats (and folders
+            // that aren't git repos). A git repo is a project of its own, so each one is asked by its folder.
+            val dirs = listOf<String?>(null) + (prefs.projectList + runCatching { api.projects() }.getOrNull().orEmpty()
+                .mapNotNull { (it as? JsonObject)?.str("worktree") }.filter { it != "/" }).distinct()
+            val list = dirs.flatMap { d -> runCatching { api.listSessions(directory = d, limit = 500) }.getOrDefault(emptyList()) }
             all.clear(); list.forEach { all[it.id] = it }
-            statuses.clear()
-            api.statuses(null).forEach { (id, o) -> o.str("type")?.takeIf { it != "idle" }?.let { statuses[id] = it } }
-            permissions.clear(); permissions.addAll(api.permissions(null))
-            questions.clear(); questions.addAll(api.questions(null))
+            statuses.clear(); permissions.clear(); questions.clear()
+            dirs.forEach { d ->
+                runCatching { api.statuses(d) }.getOrNull()?.forEach { (id, o) -> o.str("type")?.takeIf { it != "idle" }?.let { statuses[id] = it } }
+                runCatching { api.permissions(d) }.getOrNull()?.forEach { r -> if (permissions.none { it.id == r.id }) permissions.add(r) }
+                runCatching { api.questions(d) }.getOrNull()?.forEach { q -> if (questions.none { it.id == q.id }) questions.add(q) }
+            }
             chats.values.forEach { it.load() }
         }.onFailure { toasts.tryEmit(it.message ?: "Could not load sessions") }
         loadModels()
@@ -98,7 +115,13 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
     suspend fun loadModels() {
         runCatching {
             val r = api.connectedProviders()
+            // only what can really answer: providers you gave a key (or whose key is in the environment),
+            // and free models; not the whole catalog of every provider OpenCode knows
+            val keyed = runCatching {
+                (kotlinx.serialization.json.Json.parseToJsonElement(java.io.File(Paths.data, "opencode/data/opencode/auth.json").readText()) as kotlinx.serialization.json.JsonObject).keys
+            }.getOrDefault(emptySet())
             picks = r.providers.flatMap { p -> p.models.values.filter { it.status != "deprecated" }.map { Pick(p, it) } }
+                .filter { it.provider.id in keyed || it.provider.env.any { e -> !System.getenv(e).isNullOrBlank() } || Helpers.cost(it) == "free" }
                 .sortedWith(compareBy({ it.provider.name }, { it.label }))
             if (picks.none { it.provider.id == prefs.providerId && it.model.id == prefs.modelId }) {
                 val def = r.default.entries.firstOrNull()
@@ -110,6 +133,7 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
         runCatching { agents = api.agents().filter { it.mode != "subagent" && !it.hidden }.map { it.name } }
         runCatching { commands = api.commands() }
         runCatching { skills = api.skills() }
+        if (picks.isNotEmpty()) Helpers.sync()
     }
 
     val pick: Pick? get() = picks.firstOrNull { it.provider.id == prefs.providerId && it.model.id == prefs.modelId }
@@ -140,12 +164,14 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
                 if (t == "retry" && st.str("message")?.contains("Free usage", true) == true && prefs.providerId != FreeModels.POLLINATIONS_ID) fallToPollinations(id)
                 if (t == "idle" && was != null) finished.tryEmit(id)
             }
-            "session.idle" -> p.str("sessionID")?.let { id -> if (statuses.remove(id) != null) finished.tryEmit(id) }
+            "session.idle" -> p.str("sessionID")?.let { id -> if (statuses.remove(id) != null) { finished.tryEmit(id); Sounds.play(Sounds.S.Done); Limits.checkSpending() } }
             "permission.asked" -> parsePermission(p).let { r ->
                 // Auto mode: the agent goes on by itself, like Claude's Auto
-                if (prefs.permMode == "auto") { scope.launch { runCatching { api.replyPermission(r.id, e.directory ?: all[r.sessionID]?.directory, "once") }.onFailure { permissions.add(r) } }; return }
+                // a helper model is the user's call even in Auto (always-allowed ones never ask)
+                if (prefs.permMode == "auto" && r.permission != "task") { scope.launch { runCatching { api.replyPermission(r.id, e.directory ?: all[r.sessionID]?.directory, "once") }.onFailure { permissions.add(r) } }; return }
                 permissions.removeAll { it.id == r.id }; permissions.add(r)
-                if (prefs.notifyPermission) Desktop.notify("cl0udly needs your OK", "${all[r.sessionID]?.displayTitle ?: "A session"} wants to use ${r.permission}")
+                if (prefs.notifyPermission) Desktop.notify("cl0udly needs your OK", "${all[rootOf(r.sessionID)]?.displayTitle ?: "A session"} " +
+                    if (r.permission == "task") "wants help from ${Helpers.label(r.patterns.firstOrNull())}" else "wants to use ${r.permission}")
             }
             "permission.replied" -> p.str("requestID")?.let { rid -> permissions.removeAll { it.id == rid } }
             "question.asked" -> parseQuestion(p).let { q -> questions.removeAll { it.id == q.id }; questions.add(q) }
@@ -154,6 +180,7 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
                 val msg = p.obj("error")?.obj("data")?.str("message") ?: p.obj("error")?.str("name")
                 if (msg != null && msg != "MessageAbortedError") {
                     toasts.tryEmit(msg)
+                    Sounds.play(Sounds.S.Error)
                     if (prefs.notifyErrors) Desktop.notify("cl0udly ran into an error", msg)
                 }
             }
@@ -191,18 +218,20 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
     // ---------- actions ----------
 
     /** Starts a session in [directory] (chats folder or a project) and sends the first message. */
-    suspend fun startAndSend(directory: String, text: String): String? = try {
+    suspend fun startAndSend(directory: String, text: String, files: List<String> = emptyList()): String? = try {
         java.io.File(directory).mkdirs()
         val s = api.createSession(directory)
         all[s.id] = s
-        send(s.id, text)
+        send(s.id, text, files)
         s.id
     } catch (e: Exception) { toasts.tryEmit(e.message ?: "Could not start a chat"); null }
 
-    suspend fun send(id: String, text: String) {
+    suspend fun send(id: String, text: String, files: List<String> = emptyList()) {
+        Sounds.play(Sounds.S.Send)
+        Helpers.pull()
         val c = chat(id)
         // "/name args": a slash command the server knows runs as a command, not as plain text
-        if (text.startsWith("/")) {
+        if (text.startsWith("/") && files.isEmpty()) {
             val name = text.drop(1).substringBefore(' ')
             if (commands.any { it.name == name }) {
                 c.addLocalUser(text); statuses[id] = "busy"
@@ -212,14 +241,26 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
             }
             if (name == "compact") { compact(id); return }
         }
-        val local = c.addLocalUser(text)
+        // pictures for a model that can't see them: say so instead of failing quietly
+        if (files.any { Attachments.isImage(it) } && pick?.model?.supportsImages == false) toasts.tryEmit("${pick?.label} can't see pictures: it gets the file name only")
+        val fileParts = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { files.mapNotNull { Attachments.part(it) } }
+        val local = c.addLocalUser(text, fileParts)
         statuses[id] = "busy"
         try {
-            val parts = buildJsonArray { add(buildJsonObject { put("type", JsonPrimitive("text")); put("text", JsonPrimitive(text)) }) }
-            api.promptAsync(
-                id, all[id]?.directory, parts, prefs.providerId, prefs.modelId, prefs.agent, prefs.variant.ifBlank { null },
-                prefs.userAbout.takeIf { it.isNotBlank() }?.let { "About the user (from their settings):\n$it" },
-            )
+            val parts = buildJsonArray {
+                if (text.isNotBlank()) add(buildJsonObject { put("type", JsonPrimitive("text")); put("text", JsonPrimitive(text)) })
+                fileParts.forEach { add(it) }
+                // the date and time, as a hidden part of the message (in the system text it would break the prompt cache every minute)
+                add(buildJsonObject { put("type", JsonPrimitive("text")); put("text", JsonPrimitive(nowLine())); put("synthetic", JsonPrimitive(true)) })
+            }
+            val system = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                Helpers.writeSettings()
+                listOfNotNull(
+                    prefs.userAbout.takeIf { it.isNotBlank() }?.let { "About the user (from their settings):\n$it" },
+                    Memory.systemBlock(id),
+                ).joinToString("\n\n").ifBlank { null }
+            }
+            api.promptAsync(id, all[id]?.directory, parts, prefs.providerId, prefs.modelId, prefs.agent, prefs.variant.ifBlank { null }, system)
             pick?.let { prefs.useModel(it.key) }
         } catch (e: Exception) {
             c.dropLocal(local); statuses.remove(id)
@@ -278,3 +319,10 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
         }.onFailure { toasts.tryEmit(it.message ?: "Could not answer") }
     }
 }
+
+/** "Now: Sunday, 15 November 2026, 15:42 (Europe/Warsaw)", for the agent. */
+internal fun nowLine(): String {
+    val z = java.time.ZonedDateTime.now()
+    return "Now: " + z.format(java.time.format.DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy, HH:mm", java.util.Locale.ENGLISH)) + " (" + z.zone.id + ")"
+}
+

@@ -25,6 +25,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -84,6 +87,41 @@ private fun parse(src: String): List<Block> {
     return out
 }
 
+private const val CODE = "md-code"
+
+/** Inline code is blue, like in Claude's app: a light blue on dark, a deeper one on light. */
+private fun codeBlue(dark: Boolean) = if (dark) androidx.compose.ui.graphics.Color(0xFF7FA8F5) else androidx.compose.ui.graphics.Color(0xFF2F64CC)
+
+/** Text with `inline code` drawn in a rounded frame with a faint fill, line by line when it wraps (as on the phone). */
+@Composable
+private fun MdText(text: AnnotatedString, style: TextStyle, modifier: Modifier = Modifier) {
+    val c = Oc.c
+    val codes = remember(text) { text.getStringAnnotations(CODE, 0, text.length) }
+    var layout by remember { androidx.compose.runtime.mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
+    val draw = if (codes.isEmpty()) modifier else modifier.drawBehind {
+        val l = layout ?: return@drawBehind
+        val fs = style.fontSize.toPx()
+        val h = fs * 0.88f * 1.45f
+        val r = androidx.compose.ui.geometry.CornerRadius(6.dp.toPx())
+        val stroke = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx())
+        codes.forEach { a ->
+            if (a.end <= a.start || a.end > l.layoutInput.text.length) return@forEach
+            for (line in l.getLineForOffset(a.start)..l.getLineForOffset(a.end - 1)) {
+                val s = maxOf(a.start, l.getLineStart(line)); val e = minOf(a.end, l.getLineEnd(line, visibleEnd = true))
+                if (e <= s) continue
+                val x0 = l.getHorizontalPosition(s, usePrimaryDirection = true)
+                val x1 = if (e >= l.getLineEnd(line, visibleEnd = true)) l.getLineRight(line) else l.getHorizontalPosition(e, usePrimaryDirection = true)
+                val mid = l.getLineBaseline(line) - fs * 0.33f
+                val tl = androidx.compose.ui.geometry.Offset(minOf(x0, x1), mid - h / 2)
+                val sz = androidx.compose.ui.geometry.Size(kotlin.math.abs(x1 - x0), h)
+                drawRoundRect(c.surfaceHigh, tl, sz, r)
+                drawRoundRect(c.border, tl, sz, r, style = stroke)
+            }
+        }
+    }
+    Text(text, style = style, modifier = draw, onTextLayout = { layout = it })
+}
+
 /** Inline marks: **bold**, *italic*, `code`, [links](url). */
 @Composable
 private fun inline(s: String): AnnotatedString {
@@ -101,7 +139,10 @@ private fun inline(s: String): AnnotatedString {
                 }
                 rest.startsWith("`") && rest.indexOf('`', 1) > 1 -> {
                     val e = rest.indexOf('`', 1)
-                    withStyle(SpanStyle(fontFamily = mono, background = c.codeBg, fontSize = 0.88.em())) { append(" " + rest.substring(1, e) + " ") }
+                    // a blue word in a rounded frame, like Claude's app (MdText draws the frame); thin spaces give it room
+                    withStyle(SpanStyle(fontFamily = mono, color = codeBlue(c.isDark), fontSize = 0.88.em())) {
+                        pushStringAnnotation(CODE, ""); append("\u2009" + rest.substring(1, e) + "\u2009"); pop()
+                    }
                     i += e + 1
                 }
                 rest.startsWith("[") && Regex("^\\[([^]]+)]\\(([^)\\s]+)\\)").find(rest) != null -> {
@@ -130,20 +171,20 @@ fun Markdown(text: String, modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(M.paragraphGap)) {
         blocks.forEach { b ->
             when (b) {
-                is Block.Para -> Text(inline(b.text), style = body)
-                is Block.Head -> Text(
+                is Block.Para -> MdText(inline(b.text), body)
+                is Block.Head -> MdText(
                     inline(b.text),
-                    style = body.copy(fontSize = when (b.level) { 1 -> 24.sp; 2 -> 21.sp; else -> 18.sp }, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold, fontFamily = Oc.heading),
+                    body.copy(fontSize = when (b.level) { 1 -> 24.sp; 2 -> 21.sp; else -> 18.sp }, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold, fontFamily = Oc.heading),
                     modifier = Modifier.padding(top = 6.dp),
                 )
                 is Block.Item -> Row(Modifier.padding(start = (b.depth * 18 + 4).dp)) {
-                    Text(b.mark, style = body.copy(color = c.textDim), modifier = Modifier.width(if (b.mark == "•") 18.dp else 26.dp))
-                    Text(inline(b.text), style = body)
+                    Text(b.mark, style = body.copy(color = c.text), modifier = Modifier.width(if (b.mark == "•") 18.dp else 26.dp))
+                    MdText(inline(b.text), body)
                 }
                 is Block.Quote -> Row {
                     Box(Modifier.width(3.dp).height(26.dp).background(c.border))
                     Spacer(Modifier.width(12.dp))
-                    Text(inline(b.text), style = body.copy(color = c.textDim))
+                    MdText(inline(b.text), body.copy(color = c.textDim))
                 }
                 is Block.Code -> CodeBlock(b.lang, b.text)
                 Block.Rule -> Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))

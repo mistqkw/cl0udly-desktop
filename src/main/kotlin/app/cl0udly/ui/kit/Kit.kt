@@ -56,9 +56,13 @@ fun Txt(
     maxLines: Int = Int.MAX_VALUE,
     align: TextAlign? = null,
     lineHeight: TextUnit = TextUnit.Unspecified,
+    italic: Boolean = false,
+    /** User or agent text: shown as it is, never translated. */
+    raw: Boolean = false,
 ) {
     Text(
-        text, modifier = modifier, color = color, fontSize = size, fontWeight = weight, fontFamily = family ?: Oc.body,
+        if (raw) text else app.cl0udly.data.I18n.t(text), modifier = modifier, color = color, fontSize = size, fontWeight = weight, fontFamily = family ?: Oc.body,
+        fontStyle = if (italic) androidx.compose.ui.text.font.FontStyle.Italic else null,
         maxLines = maxLines, overflow = TextOverflow.Ellipsis, textAlign = align, lineHeight = lineHeight,
     )
 }
@@ -79,7 +83,15 @@ fun Modifier.hoverTap(shape: Shape, selected: Boolean = false, enabled: Boolean 
     val source = remember { MutableInteractionSource() }
     val hovered by source.collectIsHoveredAsState()
     val a by animateFloatAsState(if (selected) 1f else if (hovered && enabled) 0.6f else 0f, tween(110), label = "hover")
-    this.clip(shape)
+    // a press sinks a touch and springs back, like on the phone
+    val pressed by source.collectIsPressedAsState()
+    val s by animateFloatAsState(
+        if (pressed && enabled) 0.97f else 1f,
+        if (pressed) androidx.compose.animation.core.spring(1f, 1500f) else androidx.compose.animation.core.spring(0.45f, 900f),
+        label = "press",
+    )
+    this.graphicsLayer { scaleX = s; scaleY = s }
+        .clip(shape)
         .background(c.surfaceHigh.copy(alpha = a), shape)
         .hoverable(source)
         .pointerHoverIcon(if (enabled) PointerIcon.Hand else PointerIcon.Default)
@@ -89,6 +101,7 @@ fun Modifier.hoverTap(shape: Shape, selected: Boolean = false, enabled: Boolean 
 /** Line icons on a 24 grid, drawn with a 1.6 stroke like the ones in Claude desktop. */
 enum class Ic(val d: String, val fill: Boolean = false) {
     Plus("M12 5v14M5 12h14"),
+    ArrowDown("M12 5v14M6 13l6 6 6-6"),
     Search("M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zM15.5 15.5 20 20"),
     Sidebar("M4 5h16v14H4zM9.5 5v14"),
     Menu("M4 7h16M4 12h16M4 17h10"),
@@ -130,11 +143,13 @@ enum class Ic(val d: String, val fill: Boolean = false) {
     Archive("M4 5h16v4H4zM5.5 9v10h13V9M10 13h4"),
     Fork("M7 4v5a3 3 0 0 0 3 3h4a3 3 0 0 1 3 3v5M17 4v4M7 20v-4"),
     Play("M8 5.5v13l10.5-6.5z"),
+    Pause("M8.5 5.5v13M15.5 5.5v13"),
     Expand("M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"),
     Share("M12 15V4M7.5 8.5 12 4l4.5 4.5M5 13v6.5h14V13"),
     Layers("M12 4l8.5 4.5L12 13 3.5 8.5zM3.5 13 12 17.5l8.5-4.5"),
     Lock("M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3"),
     Bell("M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5h4"),
+    Return("M19 6v5a3 3 0 0 1-3 3H5.5M9.5 10 5.5 14l4 4"),
     Mic("M12 4a2.5 2.5 0 0 1 2.5 2.5v5a2.5 2.5 0 0 1-5 0v-5A2.5 2.5 0 0 1 12 4zM6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v3"),
     Slash("M15 4 9 20"),
     Phone("M8 3.5h8v17H8zM11 17.5h2"),

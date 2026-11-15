@@ -87,7 +87,7 @@ enum class CloudMood { Idle, Happy, Angry, Sleep, Love, Wink, Surprised, Dizzy, 
  */
 internal fun DrawScope.drawIconCloud(
     x: Float, y: Float, w: Float, mood: CloudMood, eyeDx: Float, blink: Float, eye: Color,
-    eyeDy: Float = 0f, outline: Color? = null,
+    eyeDy: Float = 0f, outline: Color? = null, body: Color = WHITE, shade: Color = GREY,
 ) {
     val k = w / CW
     // start on a whole pixel and size the blocks from it: when moving, the cloud shifts as a whole
@@ -103,12 +103,12 @@ internal fun DrawScope.drawIconCloud(
         r(-o, 113f - o, CW + o, CH + o, outline)
         r(152f - o, -o, 635f + o, 113f, outline)
     }
-    r(0f, 113f, CW, CH, WHITE)
-    r(152f, 0f, 565f, 114f, WHITE)
-    r(565f, 0f, 635f, 113f, GREY)
-    r(635f, 113f, 704f, 193f, GREY)
-    r(0f, 213f, 62f, CH, GREY)
-    r(62f, 333f, 127f, CH, GREY)
+    r(0f, 113f, CW, CH, body)
+    r(152f, 0f, 565f, 114f, body)
+    r(565f, 0f, 635f, 113f, shade)
+    r(635f, 113f, 704f, 193f, shade)
+    r(0f, 213f, 62f, CH, shade)
+    r(62f, 333f, 127f, CH, shade)
 
     val ew = 68f; val eh = 198f; val top = 110f + eyeDy * CW
     val dx = eyeDx * CW
@@ -130,7 +130,7 @@ internal fun DrawScope.drawIconCloud(
                 r(ex, top + 80f, ex + ew, top + eh, eye)
                 val inner = if (i == 0) ex + ew - 34f else ex
                 r(inner, top + 40f, inner + 34f, top + 80f, eye)
-                r(if (i == 0) ex else ex + 34f, top + 80f, if (i == 0) ex + 34f else ex + ew, top + 110f, WHITE)
+                r(if (i == 0) ex else ex + 34f, top + 80f, if (i == 0) ex + 34f else ex + ew, top + 110f, body)
             }
             CloudMood.Sleep -> r(ex - 10f, top + eh - 34f, ex + ew + 10f, top + eh, eye)
             // being petted: "^" and lilac cheeks under the eyes
@@ -293,7 +293,7 @@ fun PixelCloud(modifier: Modifier, thinking: Boolean = false, interactive: Boole
             Battery.read()?.let { (now, lvl) ->
                 lowBattery = !now && lvl in 0 until 15
                 if (plugged == false && now) {
-                    lastTouch = System.currentTimeMillis(); set(CloudMood.Happy, 1500); boing(0.8f)
+                    lastTouch = System.currentTimeMillis(); app.cl0udly.data.Sounds.play(app.cl0udly.data.Sounds.S.Tap); set(CloudMood.Happy, 1500); boing(0.8f)
                     bit('z', 0.78f); bit('z', 0.78f, 450); bit('z', 0.78f, 900)
                 }
                 plugged = now
@@ -445,7 +445,7 @@ fun PixelCloud(modifier: Modifier, thinking: Boolean = false, interactive: Boole
                         if (nd != dir && run > size.width * 0.12f) {
                             turns++; run = 0f
                             if (turns >= 2) {
-                                if (mood != CloudMood.Love) { haptic(); onReact?.invoke("pet"); Graph.prefs.petCount = ((Graph.prefs.petCount.toIntOrNull() ?: 0) + 1).toString() }
+                                if (mood != CloudMood.Love) { haptic(); app.cl0udly.data.Sounds.play(app.cl0udly.data.Sounds.S.Pet); onReact?.invoke("pet"); Graph.prefs.petCount = ((Graph.prefs.petCount.toIntOrNull() ?: 0) + 1).toString() }
                                 set(CloudMood.Love, 1600); heart()
                             }
                         }

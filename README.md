@@ -9,10 +9,21 @@ Claude desktop: заголовок с переключателем Chat / Code, 
 здесь мышь: глаза следят за курсором, а если быстро повозить курсором по облачку, у него закружится голова.
 На ноутбуке облачко замечает зарядку.
 
+## Установить
+
+Linux x64:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mistqkw/cl0udly-desktop/main/get.sh | bash
+```
+
+Ставит последний релиз в `~/.local/share/cl0udly-app`, команду `cl0udly` и ярлык в меню.
+Телефонная версия: [cl0udly-mobile](https://github.com/mistqkw/cl0udly-mobile).
+
 ## Как это работает
 
-При первом запуске cl0udly скачивает официальный OpenCode 1.19.4 для Linux в
-`~/.local/share/cl0udly/opencode` (контрольная сумма закреплена) и запускает `opencode serve` на
+При первом запуске cl0udly скачивает официальный OpenCode 1.x для Linux в
+`~/.local/share/cl0udly/opencode` (контрольная сумма проверяется; дальше он обновляется сам внутри 1.x) и запускает `opencode serve` на
 127.0.0.1 с паролем. Обычные чаты живут в `~/.local/share/cl0udly/chats`, для Code выбирается папка
 проекта. У этого сервера свои настройки, ключи и история (`~/.local/share/cl0udly/opencode/{config,data}`),
 OpenCode 2, если он стоит на ПК, их не делит. Можно подключиться и к чужому `opencode serve` (Настройки → Server).

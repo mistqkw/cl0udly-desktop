@@ -1,5 +1,7 @@
 package app.cl0udly.ui
 
+import app.cl0udly.ui.kit.Pop
+import app.cl0udly.ui.kit.PopItem
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -63,7 +65,10 @@ import kotlinx.coroutines.launch
 private class Sec(val id: String, val ic: Ic, val title: String, val words: String)
 
 private val SECTIONS = listOf(
-    Sec("general", Ic.User, "General", "name profile about you language"),
+    Sec("general", Ic.Settings, "General", "name profile about you language"),
+    Sec("account", Ic.User, "Account", "sign in login photo avatar picture opencode key"),
+    Sec("memory", Ic.Bulb, "Memory", "remember notes forget facts"),
+    Sec("helpers", Ic.Fork, "Helpers", "subagents other models parallel tokens brief check verify style"),
     Sec("usage", Ic.Gauge, "Usage", "limits spending cost tokens 5 hours week month go"),
     Sec("appearance", Ic.Palette, "Appearance", "look theme dark light color text size width motion animation font"),
     Sec("instructions", Ic.Edit, "Your cl0udly", "instructions agents.md memory rules prompt"),
@@ -118,6 +123,9 @@ fun SettingsDialog() {
                         Column(Modifier.widthIn(max = 760.dp)) {
                             when (id) {
                                 "general" -> General()
+                                "account" -> AccountPage()
+                                "memory" -> MemoryPage()
+                                "helpers" -> HelpersPage()
                                 "usage" -> UsagePage()
                                 "appearance" -> Appearance()
                                 "instructions" -> Instructions()
@@ -141,14 +149,14 @@ fun SettingsDialog() {
 }
 
 @Composable
-private fun Head(title: String, sub: String? = null) {
+internal fun Head(title: String, sub: String? = null) {
     Txt(title, size = 22.sp, weight = FontWeight.SemiBold, family = Oc.heading)
     if (sub != null) { Spacer(Modifier.height(6.dp)); Txt(sub, size = 14.sp, color = Oc.c.textDim, lineHeight = 21.sp) }
     Spacer(Modifier.height(22.dp))
 }
 
 @Composable
-private fun Group(title: String? = null, content: @Composable () -> Unit) {
+internal fun Group(title: String? = null, content: @Composable () -> Unit) {
     val c = Oc.c
     if (title != null) Txt(title, size = 13.sp, color = c.textDim, weight = FontWeight.Medium, family = Oc.label, modifier = Modifier.padding(bottom = 8.dp, start = 2.dp))
     Column(Modifier.fillMaxWidth().clip(Oc.round(14.dp)).border(1.dp, c.border, Oc.round(14.dp))) { content() }
@@ -156,7 +164,7 @@ private fun Group(title: String? = null, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun SettingRow(title: String, sub: String? = null, last: Boolean = false, trailing: @Composable () -> Unit) {
+internal fun SettingRow(title: String, sub: String? = null, last: Boolean = false, trailing: @Composable () -> Unit) {
     val c = Oc.c
     Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
@@ -170,7 +178,7 @@ private fun SettingRow(title: String, sub: String? = null, last: Boolean = false
 }
 
 @Composable
-private fun Toggle(on: Boolean, onChange: (Boolean) -> Unit) {
+internal fun Toggle(on: Boolean, onChange: (Boolean) -> Unit) {
     val c = Oc.c
     val x by animateFloatAsState(if (on) 1f else 0f, tween(120), label = "toggle")
     Box(Modifier.size(40.dp, 24.dp).clip(CircleShape).background(if (on) c.accent else c.surfaceHigh).hoverTap(CircleShape) { onChange(!on) }.padding(3.dp)) {
@@ -179,7 +187,7 @@ private fun Toggle(on: Boolean, onChange: (Boolean) -> Unit) {
 }
 
 @Composable
-private fun Segmented(options: List<Pair<String, String>>, value: String, onPick: (String) -> Unit) {
+internal fun Segmented(options: List<Pair<String, String>>, value: String, onPick: (String) -> Unit) {
     val c = Oc.c
     Row(Modifier.clip(Oc.round(10.dp)).background(c.surface).padding(3.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
         options.forEach { (id, label) ->
@@ -214,6 +222,42 @@ private fun General() {
     Group("Look") {
         SettingRow("Color mode") { Segmented(listOf("system" to "System", "light" to "Light", "dark" to "Dark"), prefs.colorMode) { prefs.colorMode = it } }
         SettingRow("Text size", last = true) { Segmented(listOf("small" to "Small", "default" to "Default", "large" to "Large"), prefs.textSize) { prefs.textSize = it } }
+    }
+    Group("Window") {
+        SettingRow(
+            "Keep running in the tray",
+            if (app.cl0udly.data.Tray.active) "Closing the window hides it; the agent keeps working. Quit from the cloud in the panel." else "Your panel has no tray, so closing the window quits.",
+        ) { Switch(prefs.closeToTray) { prefs.closeToTray = it } }
+        SettingRow("Sounds", "A soft note when a message goes, when a reply is done, when you pet the mascot.", last = true) {
+            Switch(prefs.sounds) { prefs.sounds = it; if (it) app.cl0udly.data.Sounds.play(app.cl0udly.data.Sounds.S.Done) }
+        }
+    }
+    Group("Language") {
+        SettingRow("Interface language", "Language of the app's own words. The agent answers in the language you write to it.", last = true) {
+            // a small list that drops down, the current one ticked
+            var open by remember { mutableStateOf(false) }
+            val names = mapOf("system" to "System", "ru" to "Русский", "en" to "English")
+            Box {
+                Row(Modifier.clip(Oc.round(8.dp)).border(1.dp, c.border, Oc.round(8.dp)).hoverTap(Oc.round(8.dp)) { open = true }.padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Txt(names[prefs.language] ?: "System", size = 14.sp)
+                    Spacer(Modifier.width(6.dp)); Icon(Ic.Chevron, 14.dp, c.textDim)
+                }
+                Pop(open, { open = false }, width = 220.dp) {
+                    names.forEach { (id, name) -> PopItem(name, sub = if (id == "system") "Follows the computer's language" else null, checked = prefs.language == id) { prefs.language = id; app.cl0udly.data.I18n.lang = id; open = false } }
+                }
+            }
+        }
+    }
+    Group("Dictation") {
+        SettingRow(
+            "Language",
+            when (prefs.voiceLang) {
+                "auto" -> "Whisper guesses it each time: any language, a few seconds slower."
+                "en" -> "English only."
+                else -> "Russian, with English words kept as they are. Fastest."
+            },
+            last = true,
+        ) { Segmented(listOf("ru" to "Russian + English", "en" to "English", "auto" to "Auto"), prefs.voiceLang) { prefs.voiceLang = it } }
     }
 }
 
@@ -271,6 +315,25 @@ private fun Mascot() {
     }
     Spacer(Modifier.height(10.dp))
     Txt("Click it, double-click it, hold it, drag it, rub it back and forth, or shake the cursor over it.", size = 13.sp, color = c.textDim)
+    Spacer(Modifier.height(14.dp))
+    // games with the cloud: the same as on the phone, played with the mouse
+    var game by remember { mutableStateOf<String?>(null) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button("Talk with cl0udly") { app.cl0udly.ui.cloud.TalkUi.open = true }
+        listOf("rain" to "Catch the rain", "cups" to "Cups", "echo" to "Echo").forEach { (id, name) ->
+            Button(name, primary = game == id) { game = if (game == id) null else id }
+        }
+    }
+    if (game != null) {
+        Spacer(Modifier.height(10.dp))
+        Box(Modifier.fillMaxWidth().height(460.dp).clip(Oc.round(16.dp)).background(c.surface).border(1.dp, c.border, Oc.round(16.dp))) {
+            when (game) {
+                "rain" -> app.cl0udly.ui.cloud.RainGame()
+                "cups" -> app.cl0udly.ui.cloud.CupsGame()
+                "echo" -> app.cl0udly.ui.cloud.EchoGame()
+            }
+        }
+    }
     Spacer(Modifier.height(4.dp))
     Txt("Petted ${prefs.petCount} times.", size = 13.sp, color = c.textDim)
     Spacer(Modifier.height(24.dp))
@@ -308,7 +371,10 @@ private fun Models() {
     Group("Add a provider") {
         Field(q, { q = it }, "Search providers (Anthropic, OpenAI, Google, OpenRouter, Groq…)", Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp), size = 14)
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.border.copy(alpha = 0.6f)))
-        val list = all.filter { q.isBlank() || it.name.contains(q, true) || it.id.contains(q, true) }.take(12)
+        // the ones people actually have keys for go first, OpenCode Go on top
+        val popular = listOf("opencode-go", "opencode", "anthropic", "openai", "google", "openrouter", "deepseek", "moonshotai", "xai", "groq", "mistral", "zai")
+        val list = all.filter { q.isBlank() || it.name.contains(q, true) || it.id.contains(q, true) }
+            .sortedBy { popular.indexOf(it.id).let { i -> if (i < 0) 99 else i } }.take(12)
         list.forEachIndexed { i, p ->
             SettingRow(p.name.ifBlank { p.id }, p.env.firstOrNull(), last = i == list.lastIndex) {
                 if (p.id in connected) Row(verticalAlignment = Alignment.CenterVertically) {
@@ -350,7 +416,7 @@ private fun Server() {
     val prefs = Graph.prefs
     val st by Graph.runtime.state.collectAsStateCompat()
     val connected by Graph.events.connected.collectAsStateCompat()
-    Head("Server", "cl0udly runs its own OpenCode ${RuntimeController.OC_VERSION} on this computer, like the phone app runs one inside itself. Or it can join another computer's `opencode serve`.")
+    Head("Server", "cl0udly runs its own OpenCode ${Graph.runtime.version} on this computer, like the phone app runs one inside itself. Or it can join another computer's `opencode serve`.")
     Group("This computer") {
         SettingRow("State", if (prefs.remoteUrl.isNotBlank()) "Not used: connected to another computer" else null) {
             Txt(
@@ -368,6 +434,17 @@ private fun Server() {
         SettingRow("Live updates", null) { Txt(if (connected) "Connected" else "Not connected", size = 14.sp, color = if (connected) c.ok else c.warn) }
         SettingRow("Log", Graph.runtime.logFile.absolutePath) { Button("Open", primary = false) { openFolder(Graph.runtime.logFile.parent) } }
         SettingRow("Restart the server", last = true) { Button("Restart", primary = false) { Graph.runtime.restart() } }
+    }
+    Group("OpenCode updates") {
+        val up = Graph.ocUpdater
+        val scope = rememberCoroutineScope()
+        SettingRow("Version ${Graph.runtime.version}", up.busy ?: prefs.ocUpdateError.ifBlank { "Checked once a day. A new build is tested first and takes over only when it works." }) {
+            Button("Check now", primary = false) { scope.launch { up.check(manual = true) } }
+        }
+        val prev = Graph.runtime.previous
+        SettingRow("Go back to the previous version", prev?.let { "OpenCode $it is kept" } ?: "No previous version yet", last = true) {
+            if (prev != null) Button("Go back", primary = false) { scope.launch { up.rollback() } }
+        }
     }
     Group("Another computer") {
         var url by remember { mutableStateOf(prefs.remoteUrl) }
@@ -403,12 +480,12 @@ private fun About() {
         Spacer(Modifier.width(18.dp))
         Column {
             Txt("cl0udly for desktop", size = 22.sp, family = Oc.heading, weight = FontWeight.SemiBold)
-            Txt("0.0.1 · was OpenCode mobile, now on the computer too", size = 14.sp, color = c.textDim)
+            Txt("$APP_VERSION · was OpenCode mobile, now on the computer too", size = 14.sp, color = c.textDim)
         }
     }
     Spacer(Modifier.height(24.dp))
     Group {
-        SettingRow("OpenCode", "The agent itself: anomalyco/opencode, MIT.") { Txt(RuntimeController.OC_VERSION, size = 13.sp, family = Oc.mono, color = c.textDim) }
+        SettingRow("OpenCode", "The agent itself: anomalyco/opencode, MIT.") { Txt(Graph.runtime.version, size = 13.sp, family = Oc.mono, color = c.textDim) }
         SettingRow("Fonts", "Inter, Source Serif 4, Unbounded, JetBrains Mono — SIL Open Font License.") { }
         SettingRow("Data", app.cl0udly.data.Paths.data.absolutePath, last = true) { Button("Open", primary = false) { openFolder(app.cl0udly.data.Paths.data.absolutePath) } }
     }
@@ -422,16 +499,18 @@ private fun UsagePage() {
     val prefs = Graph.prefs
     val snap by Graph.usage.snapshot.collectAsStateCompat()
     Head("Usage", "OpenCode has no API for the remaining limits, so cl0udly adds up the cost of every reply that went through this computer.")
-    Group("Limits") {
-        Column(Modifier.padding(horizontal = 18.dp, vertical = 8.dp)) {
-            listOf(snap.fiveHour, snap.week, snap.month).forEach { UsageRow(it) }
-        }
-    }
+    UsageHero(snap)
+    Spacer(Modifier.height(14.dp))
+    DailyBars(snap.daily)
+    Spacer(Modifier.height(14.dp))
     Group("By model · last 30 days") {
         if (snap.byModel.isEmpty()) SettingRow("Nothing counted yet", "Replies show up here as soon as they finish.", last = true) { }
         snap.byModel.take(12).forEachIndexed { i, m ->
             SettingRow(m.model, "${m.provider} · ${m.messages} replies · ${tokens(m.tokens)} tokens", last = i == minOf(11, snap.byModel.lastIndex)) {
-                Txt(money(m.cost), size = 14.sp, family = Oc.mono)
+                Column(horizontalAlignment = Alignment.End) {
+                    Txt(money(m.cost), size = 14.sp, family = Oc.mono)
+                    Bar(if (snap.totalMonth > 0) (m.cost / snap.totalMonth).toFloat() else 0f, Modifier.padding(top = 5.dp).width(64.dp))
+                }
             }
         }
     }

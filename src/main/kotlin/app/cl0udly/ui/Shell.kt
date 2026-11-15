@@ -33,6 +33,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.draw.alpha
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -107,6 +109,7 @@ fun WindowScope.Shell(onClose: () -> Unit) {
                             Screen.Home -> Home()
                             is Screen.Chat -> ChatScreen(s.id)
                             Screen.Projects -> ProjectsScreen()
+                            Screen.Memory -> MemoryScreen()
                         }
                     }
                     ServerBanner(Modifier.align(Alignment.TopCenter).padding(top = 10.dp))
@@ -172,6 +175,7 @@ private fun TitleCenter(modifier: Modifier) {
         when (s) {
             is Screen.Chat -> Graph.hub.session(s.id)?.let { SessionTitle(it) }
             Screen.Projects -> Txt("Projects", size = M.navText)
+            Screen.Memory -> Txt("Memory", size = M.navText)
             Screen.Home -> if (Graph.prefs.mode == "code" && Nav.project != null) Txt(File(Nav.project!!).name, size = M.navText)
         }
     }
@@ -186,6 +190,11 @@ fun SessionMenu(s: Session, close: () -> Unit, inTitle: Boolean = false) {
     if (!inTitle) PopItem("Open", Ic.Chat) { close(); Nav.go(Screen.Chat(s.id)) }
     PopItem(if (pinned) "Unpin" else "Pin", Ic.Pin) { close(); prefs.togglePin(s.id) }
     PopItem("Rename", Ic.Edit) { close(); Renaming.id = s.id }
+    if (prefs.memoryOn) PopItem(if (prefs.memoryOn(s.id)) "Turn off memory here" else "Turn on memory here", Ic.Bulb) {
+        close(); prefs.setChatMemory(s.id, !prefs.memoryOn(s.id))
+        Graph.hub.toasts.tryEmit(if (prefs.memoryOn(s.id)) "Memory is on in this chat" else "Memory is off in this chat: nothing is read or saved")
+    }
+    PopItem("Timeline", Ic.Layers, sub = if (inTitle) "Who did what and when, with helpers and cost" else null) { close(); TimelineUi.id = s.id }
     PopItem("Fork", Ic.Fork, sub = if (inTitle) "A copy of this conversation to try another way" else null) { close(); hub.fork(s.id) }
     if (inTitle) {
         PopItem("Transcript view", Ic.Layers, value = prefs.transcriptView.replaceFirstChar { it.uppercase() }, submenu = { c2 ->
@@ -213,12 +222,30 @@ fun SessionMenu(s: Session, close: () -> Unit, inTitle: Boolean = false) {
 private fun SessionTitle(s: Session) {
     var menu by remember { mutableStateOf(false) }
     Box {
-        Row(Modifier.hoverTap(Oc.round(8.dp)) { menu = true }.padding(horizontal = 8.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (s.id in Graph.prefs.pinnedList) { Icon(Ic.Pin, 14.dp, Oc.c.textDim); Spacer(Modifier.width(6.dp)) }
-            Txt(s.displayTitle, size = M.navText, maxLines = 1, modifier = Modifier.widthIn(max = 520.dp).padding(end = 6.dp))
-            Icon(Ic.Chevron, 16.dp, Oc.c.textDim)
-        }
+        // no title over the chat, only "…": rename, pin, memory, fork, compact, archive and delete are in it
+        IconButton(Ic.More, { menu = true }, selected = menu)
         Pop(menu, { menu = false }, minWidth = 250.dp) { SessionMenu(s, { menu = false }, inTitle = true) }
+    }
+}
+
+/** Remote Control in the title bar: the phone icon, with an accent dot while the phone may connect. */
+@Composable
+private fun RemoteButton() {
+    val c = Oc.c
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(Ic.Phone, { open = true }, selected = open, tint = if (Graph.prefs.remoteControl) c.text else c.textDim)
+        if (Graph.prefs.remoteControl) Box(Modifier.align(Alignment.TopEnd).padding(5.dp).size(7.dp).clip(CircleShape).background(c.accent))
+        Pop(open, { open = false }, width = 460.dp) {
+            Column(Modifier.padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Txt("Remote Control", size = 16.sp, weight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    RemoteSwitch()
+                }
+                Spacer(Modifier.height(10.dp))
+                RemoteBody()
+            }
+        }
     }
 }
 
@@ -229,6 +256,7 @@ private fun WindowScope.TitleRight(onClose: () -> Unit) {
     Row(Modifier.padding(end = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         Panes.all.forEach { (id, ic, _) -> IconButton(ic, { Nav.toggle(id) }, selected = Nav.pane == id, tint = if (Nav.pane == id) Oc.c.text else Oc.c.textDim) }
         Box(Modifier.padding(horizontal = 8.dp).width(1.dp).height(18.dp).background(Oc.c.border))
+        RemoteButton()
         Box {
             IconButton(Ic.Palette, { looks = true })
             LookMenu(looks) { looks = false }
@@ -255,6 +283,7 @@ private fun Sidebar() {
             NavRow(Ic.Plus, if (prefs.mode == "code") "New session" else "New chat", hint = "Ctrl+N") { Nav.go(Screen.Home) }
             NavRow(Ic.Search, "Search", hint = "Ctrl+K") { Nav.search = true }
             NavRow(Ic.Folder, "Projects", selected = Nav.screen == Screen.Projects) { Nav.go(Screen.Projects) }
+            NavRow(MEMORY_ICON, "Memory", selected = Nav.screen == Screen.Memory) { Nav.go(Screen.Memory) }
             NavRow(Ic.Sliders, "Customize") { Nav.settings = "capabilities" }
             Box {
                 NavRow(Ic.More, "More") { more = true }
@@ -384,10 +413,13 @@ private fun SessionRow(s: Session, modifier: Modifier = Modifier) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Txt(s.displayTitle, size = M.navText, maxLines = 1, modifier = Modifier.weight(1f), color = if (selected) c.text else c.text.copy(alpha = 0.92f))
+            val done = s.id in Graph.hub.doneUnseen
+            if (selected && done) androidx.compose.runtime.LaunchedEffect(Unit) { Graph.hub.doneUnseen.remove(s.id) }
             if (waiting) { Spacer(Modifier.width(8.dp)); Box(Modifier.size(7.dp).clip(CircleShape).background(c.warn)) }
-            else if (busy) {
+            else if (busy || done) {
                 Spacer(Modifier.width(8.dp))
-                if (Oc.look.clouds) MiniCloudIcon(16.dp) else Box(Modifier.size(7.dp).clip(CircleShape).background(c.accent))
+                // breathing slowly while the agent works, bright blue and still once the task is done
+                WorkDot(working = busy && !done, size = 8.dp)
             }
         }
     }
@@ -481,7 +513,8 @@ private fun AccountRow() {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.size(28.dp).clip(CircleShape).background(c.surfaceHigh), contentAlignment = Alignment.Center) {
-                if (Oc.look.clouds) GhostCloud(18.dp, active = true, eyesLook = true)
+                if (prefs.avatarPath.isNotBlank()) Avatar(28.dp)
+                else if (Oc.look.clouds) GhostCloud(18.dp, active = true, eyesLook = true)
                 else Txt(prefs.name.take(1).uppercase(), size = 13.sp, weight = FontWeight.SemiBold)
             }
             Spacer(Modifier.width(10.dp))
@@ -494,6 +527,8 @@ private fun AccountRow() {
         Pop(menu, { menu = false }, Side.Above, width = (M.sidebar - M.listInset * 2)) {
             PopHeader(System.getProperty("user.name") + "@" + runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrDefault("localhost"))
             PopItem("Settings", Ic.Settings, hint = "Ctrl+,") { menu = false; Nav.settings = "general" }
+            PopItem("Account", Ic.User, value = if (prefs.signedIn.isBlank()) "Sign in" else null) { menu = false; Nav.settings = "account" }
+            PopItem("Memory", Ic.Bulb) { menu = false; Nav.settings = "memory" }
             PopItem("Usage", Ic.Gauge) { menu = false; Nav.settings = "usage" }
             PopItem("Look", Ic.Palette, value = Looks.of(prefs.edition).title, submenu = { close ->
                 Looks.all.forEach { l -> PopItem(l.title, checked = prefs.edition == l.id) { close(); menu = false; prefs.edition = l.id } }
@@ -549,3 +584,19 @@ fun openFolder(dir: String) {
 
 @Composable
 fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectAsStateCompat() = collectAsState()
+
+/** The bright blue of a finished task: the same in every look, so it reads at a glance (as on the phone). */
+val DoneBlue = androidx.compose.ui.graphics.Color(0xFF3D8BFF)
+
+/** A chat's state as a dot: breathes slowly (2.4 s in, 2.4 s out) while working, bright blue and still when done. */
+@Composable
+fun WorkDot(working: Boolean, size: androidx.compose.ui.unit.Dp = 8.dp) {
+    if (!working) return Box(Modifier.size(size).clip(CircleShape).background(DoneBlue))
+    val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "work-dot")
+    val a by t.animateFloat(
+        0.18f, 0.85f,
+        androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(2400, easing = androidx.compose.animation.core.LinearEasing), androidx.compose.animation.core.RepeatMode.Reverse),
+        label = "breath",
+    )
+    Box(Modifier.size(size).alpha(a).clip(CircleShape).background(Oc.c.text))
+}

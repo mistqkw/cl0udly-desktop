@@ -34,6 +34,7 @@ sealed interface Screen {
     data object Home : Screen
     data class Chat(val id: String) : Screen
     data object Projects : Screen
+    data object Memory : Screen
 }
 
 /** Back and forward like a browser: the arrows in the title bar (Claude desktop has them too). */

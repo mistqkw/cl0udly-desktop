@@ -57,7 +57,7 @@ fun Home() {
     val look = Oc.look
     val prefs = Graph.prefs
     val code = prefs.mode == "code"
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().fileDrop()) {
         if (look.clouds) Box(Modifier.fillMaxSize().then(with(CloudBackdrop) { Modifier.backdrop(c.bg, c.isDark, "desk-home-${prefs.mode}", false) }))
         if (code && Nav.project == null) { ProjectPicker(); return@Box }
         Column(
@@ -70,7 +70,7 @@ fun Home() {
             val dir = if (code) Nav.project!! else CHAT_DIR
             Composer(
                 big = true, busy = false,
-                onSend = { Graph.scope.launchSend(dir, it) },
+                onSend = { t, files -> Graph.scope.launchSend(dir, t, files) },
                 placeholder = if (code) "Describe a task for ${File(dir).name}" else "How can I help you today?",
                 modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(),
             )

@@ -63,11 +63,14 @@ object Pickers {
     fun files(title: String = "Add files", onPick: (List<String>) -> Unit) =
         pick(PickRequest(folders = false, multiple = true, title = title, start = Nav.project) { onPick(it) })
 
-    /** File → Open file…: text and code open in the Files panel, pages and pictures in the browser. */
+    /** File → Open file…: text and code open in the Files panel, pages in the browser, pictures, PDFs and media in the viewer. */
     fun openFile() = files("Open a file") { list ->
         list.firstOrNull()?.let { f ->
-            if (f.substringAfterLast('.').lowercase() in setOf("html", "htm", "svg", "png", "jpg", "jpeg", "gif", "webp", "pdf")) Nav.openUrl(File(f).toURI().toString())
-            else { Panes.preview = f; Nav.pane = "files" }
+            when (f.substringAfterLast('.').lowercase()) {
+                "html", "htm", "svg" -> Nav.openUrl(File(f).toURI().toString())
+                "png", "jpg", "jpeg", "gif", "webp", "bmp", "pdf", "mp4", "mov", "webm", "mp3", "wav", "m4a", "ogg", "flac", "csv", "tsv" -> FileView.open(f)
+                else -> { Panes.preview = f; Nav.pane = "files" }
+            }
         }
     }
 }

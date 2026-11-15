@@ -335,6 +335,6 @@ fun QuickEntry() {
     }
 }
 
-fun kotlinx.coroutines.CoroutineScope.launchSend(dir: String, text: String) = launch {
-    Graph.hub.startAndSend(dir, text)?.let { Nav.go(Screen.Chat(it)) }
+fun kotlinx.coroutines.CoroutineScope.launchSend(dir: String, text: String, files: List<String> = emptyList()) = launch {
+    Graph.hub.startAndSend(dir, text, files)?.let { Nav.go(Screen.Chat(it)) }
 }

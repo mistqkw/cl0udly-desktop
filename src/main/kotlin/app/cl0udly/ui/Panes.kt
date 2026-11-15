@@ -316,33 +316,72 @@ private fun ContextPane() {
 /** The phone joins this computer's server over the local network: a QR with the address and password. */
 @Composable
 private fun RemoteControl() {
+    Section("Remote Control", trailing = { RemoteSwitch() }) { RemoteBody() }
+}
+
+@Composable
+internal fun RemoteSwitch() {
+    val prefs = Graph.prefs
+    Switch(prefs.remoteControl) { on ->
+        prefs.remoteControl = on
+        if (prefs.remoteUrl.isBlank()) Graph.runtime.restart()
+    }
+}
+
+/**
+ * Remote Control: the phone drives this computer's server, so every session here (and the one open
+ * now, which the code opens straight away) works from the phone: replies, OKs, helpers. The QR holds
+ * the address and the password; a new password shuts out every phone that had the old one.
+ * Over the home network it works as is; from anywhere through Tailscale on both devices.
+ */
+@Composable
+internal fun RemoteBody() {
     val c = Oc.c
     val prefs = Graph.prefs
-    val scope = rememberCoroutineScope()
-    Section("Remote Control", trailing = {
-        Switch(prefs.remoteControl) { on ->
-            prefs.remoteControl = on
-            if (prefs.remoteUrl.isBlank()) Graph.runtime.restart()
-        }
-    }) {
-        if (!prefs.remoteControl) {
-            Txt("Continue this computer's sessions from cl0udly on your phone, over Wi-Fi.", size = 14.sp, color = c.textDim, lineHeight = 20.sp)
-            return@Section
-        }
-        val lan = remember { Desktop.lanAddress() }
-        if (lan == null) { Txt("No local network found", size = 14.sp, color = c.warn); return@Section }
-        val link = "cl0udly://connect?n=${enc(prefs.name)}&u=${enc("http://$lan:${prefs.serverPort}")}&p=${enc(prefs.serverPassword)}"
-        val qr = remember(link, c.isDark) { qr(link, 220) }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.clip(Oc.round(10.dp)).background(Color.White).padding(8.dp)) { Image(qr, null, Modifier.size(150.dp)) }
-            Spacer(Modifier.width(16.dp))
-            Column {
-                Txt("Scan with cl0udly on the phone", size = 14.sp)
-                Spacer(Modifier.height(4.dp))
-                Txt("http://$lan:${prefs.serverPort}", size = 13.sp, color = c.textDim, family = Oc.mono)
-                Spacer(Modifier.height(10.dp))
-                SmallButton("Copy link", Ic.Copy) { copy(link) }
+    if (prefs.remoteUrl.isNotBlank()) { Txt("This window drives another computer's server; Remote Control is for this computer's own.", size = 14.sp, color = c.textDim, lineHeight = 20.sp); return }
+    if (!prefs.remoteControl) {
+        Txt("Drive this computer's sessions from cl0udly on your phone: answer, approve, watch the helpers. At home over Wi-Fi, anywhere through Tailscale.", size = 14.sp, color = c.textDim, lineHeight = 20.sp)
+        return
+    }
+    val addrs = remember { Desktop.addresses() }
+    if (addrs.isEmpty()) { Txt("No network found", size = 14.sp, color = c.warn); return }
+    var chosen by remember { mutableStateOf(addrs.first().first) }
+    val session = (Nav.screen as? Screen.Chat)?.id
+    val link = "cl0udly://connect?n=${enc(prefs.name)}&u=${enc("http://$chosen:${prefs.serverPort}")}&p=${enc(prefs.serverPassword)}" + (session?.let { "&s=${enc(it)}" } ?: "")
+    val qr = remember(link) { qr(link, 260) }
+    Row(verticalAlignment = Alignment.Top) {
+        Box(Modifier.clip(Oc.round(10.dp)).background(Color.White).padding(8.dp)) { Image(qr, null, Modifier.size(150.dp)) }
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Txt(if (session != null) "Scan with cl0udly on the phone: it opens this chat" else "Scan with cl0udly on the phone", size = 14.sp, lineHeight = 20.sp)
+            Spacer(Modifier.height(8.dp))
+            addrs.forEach { (ip, what) ->
+                Row(Modifier.fillMaxWidth().hoverTap(Oc.round(8.dp), ip == chosen) { chosen = ip }.padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (ip == chosen) c.accent else c.border))
+                    Spacer(Modifier.width(8.dp))
+                    Column {
+                        Txt(what, size = 13.sp)
+                        Txt("$ip:${prefs.serverPort}", size = 12.sp, color = c.textDim, family = Oc.mono)
+                    }
+                }
             }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SmallButton("Copy link", Ic.Copy) { copy(link) }
+                SmallButton("New code", Ic.Key) {
+                    prefs.serverPassword = java.util.UUID.randomUUID().toString().replace("-", "").take(24)
+                    Graph.runtime.restart()
+                    Graph.hub.toasts.tryEmit("New code: phones with the old one are out. Scan again.")
+                }
+            }
+        }
+    }
+    if (addrs.none { it.second.startsWith("Tailscale") }) {
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth().clip(Oc.round(10.dp)).background(c.surface).hoverTap(Oc.round(10.dp)) { Desktop.open("https://tailscale.com/download") }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Ic.Globe, 16.dp, c.textDim)
+            Spacer(Modifier.width(10.dp))
+            Txt("Away from home? Install Tailscale (free) on this computer and on the phone and sign in to both: its address appears here and works from anywhere.", size = 13.sp, color = c.textDim, lineHeight = 19.sp, modifier = Modifier.weight(1f))
         }
     }
 }

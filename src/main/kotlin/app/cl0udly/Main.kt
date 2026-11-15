@@ -1,6 +1,8 @@
 package app.cl0udly
 
 import androidx.compose.animation.core.Animatable
+import app.cl0udly.ui.Lightbox
+import app.cl0udly.ui.LightboxHost
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -51,6 +53,10 @@ import kotlinx.coroutines.flow.first
 
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
+    // already running (in the tray, say): bring that one up instead of starting a second copy
+    if (app.cl0udly.data.Single.handOff()) return
+    app.cl0udly.data.Single.listen()
+    app.cl0udly.data.I18n.lang = Graph.prefs.language
     System.setProperty("skiko.renderApi", System.getProperty("skiko.renderApi") ?: "OPENGL")
     // the terminal and the browser are Swing/JavaFX views: blending lets menus and dialogs draw over them
     System.setProperty("compose.interop.blending", "true")
@@ -62,16 +68,52 @@ fun main() {
     }
     Graph.start()
     // a killed window must not leave its opencode server running
-    Runtime.getRuntime().addShutdownHook(Thread { Graph.runtime.stop() })
+    Runtime.getRuntime().addShutdownHook(Thread { app.cl0udly.data.Tray.stop(); app.cl0udly.data.Desktop.inhibit(false); Graph.runtime.stop() })
     application {
         val state = rememberWindowState(size = androidx.compose.ui.unit.DpSize(1440.dp, 900.dp))
         val icon = remember { runCatching { BitmapPainter(Thread.currentThread().contextClassLoader.getResourceAsStream("icon.png")!!.use(::loadImageBitmap)) }.getOrNull() }
-        fun quit() { Graph.runtime.stop(); exitApplication() }
-        Nav.quit = ::quit
+        fun quit() { app.cl0udly.data.Tray.stop(); Graph.runtime.stop(); exitApplication() }
+        // with the tray icon there, closing only hides the window: the server and the agent keep working
+        var shown by remember { mutableStateOf(true) }
+        var bringUp by remember { mutableStateOf(0) }
+        fun close() {
+            if (!(app.cl0udly.data.Tray.active && Graph.prefs.closeToTray)) return quit()
+            shown = false
+            if (!Graph.prefs.trayHintShown) {
+                Graph.prefs.trayHintShown = true
+                app.cl0udly.data.Desktop.notify("cl0udly is still here", "It keeps working in the tray. Right-click the cloud to quit.")
+            }
+        }
+        LaunchedEffect(Unit) {
+            app.cl0udly.data.Tray.start(
+                open = { shown = true; bringUp++ },
+                quick = { shown = true; bringUp++; Nav.quick = true },
+                quit = { java.awt.EventQueue.invokeLater { quit() } },
+            )
+        }
+        // a second launch knocked: show the window
+        LaunchedEffect(Unit) { androidx.compose.runtime.snapshotFlow { app.cl0udly.data.Single.asks }.collect { if (it > 0) { shown = true; bringUp++ } } }
+        LaunchedEffect(Unit) { androidx.compose.runtime.snapshotFlow { Graph.hub.statuses.size }.collect { app.cl0udly.data.Tray.busy = it } }
+        LaunchedEffect(Unit) { androidx.compose.runtime.snapshotFlow { Graph.hub.pick?.label.orEmpty() }.collect { app.cl0udly.data.Tray.plan = it } }
+        LaunchedEffect(Unit) {
+            Graph.usage.snapshot.collect { u ->
+                // like Claude's "Usage: 98%": the fullest limit that is set, else this month's spend
+                val w = listOf(u.fiveHour, u.week, u.month).filter { it.limit > 0 }.maxByOrNull { it.fraction }
+                app.cl0udly.data.Tray.usage = if (w != null) "Usage: ${w.percent.toInt()}%" else "Usage: \$${"%.2f".format(u.totalMonth)} this month"
+            }
+        }
+        // Quit (Ctrl+Q, the menu) while a chat is working would cut the agent off mid-answer: it goes to the tray instead
+        Nav.quit = {
+            if (Graph.hub.statuses.isNotEmpty() && app.cl0udly.data.Tray.active) {
+                shown = false
+                app.cl0udly.data.Desktop.notify("cl0udly is still working", "It went to the tray so the agent can finish. Quit from the cloud's menu to stop it.")
+            } else quit()
+        }
         Window(
-            onCloseRequest = ::quit, state = state, title = "cl0udly", icon = icon, undecorated = true,
-            onPreviewKeyEvent = ::shortcut,
+            onCloseRequest = ::close, state = state, title = "cl0udly", icon = icon, undecorated = true,
+            visible = shown, onPreviewKeyEvent = ::shortcut,
         ) {
+            LaunchedEffect(bringUp) { if (bringUp > 0) { window.isVisible = true; window.toFront(); window.requestFocus() } }
             LaunchedEffect(Unit) {
                 window.minimumSize = java.awt.Dimension(720, 560)
                 window.addWindowFocusListener(object : java.awt.event.WindowFocusListener {
@@ -85,12 +127,18 @@ fun main() {
                         .onPointerEvent(PointerEventType.Move) { Pointer.pos = it.changes.firstOrNull()?.position }
                         .onPointerEvent(PointerEventType.Exit) { Pointer.pos = null },
                 ) {
-                    Shell(onClose = ::quit)
+                    Shell(onClose = ::close)
                     SearchOverlay()
                     QuickEntry()
                     SettingsDialog()
                     PickerDialog()
+                    LightboxHost()
+                    app.cl0udly.ui.FileViewerHost()
+                    app.cl0udly.ui.HelperHost()
                     Intro()
+                    app.cl0udly.ui.WhatsNewHost()
+                    app.cl0udly.ui.TimelineHost()
+                    app.cl0udly.ui.cloud.TalkHost()
                 }
             }
         }
@@ -123,6 +171,8 @@ private fun shortcut(e: KeyEvent): Boolean {
         else -> {}
     }
     if (e.key == Key.Escape) {
+        if (Lightbox.src != null) { Lightbox.src = null; return true }
+        if (app.cl0udly.ui.FileView.path != null) { app.cl0udly.ui.FileView.path = null; return true }
         if (Nav.picker != null) { Nav.picker = null; return true }
         if (Nav.settings != null) { Nav.settings = null; return true }
         if (Nav.search || Nav.quick) { Nav.search = false; Nav.quick = false; return true }
