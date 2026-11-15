@@ -66,6 +66,8 @@ compose.desktop {
             macOS {
                 iconFile.set(project.file("packaging/icon.icns"))
                 bundleID = "app.cl0udly"
+                // macOS wants the first number above 0; the app shows its own version (APP_VERSION)
+                packageVersion = "1.0.1"
             }
         }
     }

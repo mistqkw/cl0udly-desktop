@@ -66,6 +66,11 @@ jobs:
           mkdir -p out
           cp build/compose/binaries/main/dmg/*.dmg "out/cl0udly-desktop-$TAG-${{ matrix.name }}.dmg"
 
+      - name: jpackage log
+        if: failure()
+        shell: bash
+        run: cat build/compose/logs/*/*.txt || true
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
