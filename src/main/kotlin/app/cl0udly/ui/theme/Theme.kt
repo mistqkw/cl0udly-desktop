@@ -74,11 +74,12 @@ private fun pal(
 )
 
 object Looks {
-    // cl0udly: graphite, pixel clouds, the cloud mascot; only black, white and a very dim blue (as on the phone)
+    // cl0udly (as on the phone): the sky of a photo of dark clouds at night (cold blue-black) under
+    // neutral grey text, frames and icons; the clouds' warm stone color is kept for the clouds alone.
     val cloud = Look(
-        "cloud", "cl0udly", "Graphite, pixel clouds, a little cloud mascot",
-        pal(true, 0xFF0B0C0E, 0xFF101114, 0xFF141619, 0xFF1D2024, 0xFFE4E7EB, 0xFF8B9199, 0xFF25292E, 0xFF7C93AF, 0xFF97AAC2, 0xFF1D2024, 0xFF111316),
-        pal(false, 0xFFF7F8FA, 0xFFEEF0F3, 0xFFEEF0F3, 0xFFE4E7EB, 0xFF15171A, 0xFF7B828B, 0xFFDDE1E6, 0xFF5A7393, 0xFF5A7393, 0xFFE9ECF0, 0xFFEEF0F3),
+        "cloud", "cl0udly", "Night sky, pixel clouds, a little cloud mascot",
+        pal(true, 0xFF04070C, 0xFF080B10, 0xFF111317, 0xFF1B1C1F, 0xFFE6E8EB, 0xFF8B9199, 0xFF24272C, 0xFFC9CFD8, 0xFFC9CFD8, 0xFF1B1C20, 0xFF080B10),
+        pal(false, 0xFFF7F8FA, 0xFFEEF0F3, 0xFFEEF0F3, 0xFFE4E7EB, 0xFF15171A, 0xFF5F656D, 0xFFDDE1E6, 0xFF3E4652, 0xFF3E4652, 0xFFE9ECF0, 0xFFEEF0F3),
         clouds = true,
     )
 

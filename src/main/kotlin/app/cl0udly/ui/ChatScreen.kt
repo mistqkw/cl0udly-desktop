@@ -1,5 +1,6 @@
 package app.cl0udly.ui
 
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.flow.first
@@ -97,8 +98,18 @@ fun ChatScreen(id: String) {
     // scrolled up to read, it stays put and a "down" button shows
     var stick by remember(id) { mutableStateOf(true) }
     var auto by remember { mutableStateOf(false) }
+    // "at the bottom" is near it, not exactly at it: while a reply grows the end moves away, and an
+    // exact check left the chat unstuck after you had scrolled all the way down
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    fun nearEnd(): Boolean {
+        val i = list.layoutInfo
+        val last = i.visibleItemsInfo.lastOrNull() ?: return true
+        if (last.index < i.totalItemsCount - 1) return false
+        return last.offset + last.size - i.viewportEndOffset < with(density) { 160.dp.toPx() }
+    }
     LaunchedEffect(id) {
-        snapshotFlow { list.isScrollInProgress }.collect { if (!it && !auto) stick = !list.canScrollForward }
+        // near the end counts only on the way down: a small scroll up from the bottom stays where you left it
+        snapshotFlow { list.isScrollInProgress }.collect { if (!it && !auto) stick = !list.canScrollForward || (list.lastScrolledForward && nearEnd()) }
     }
     LaunchedEffect(id) {
         while (true) {
@@ -134,8 +145,12 @@ fun ChatScreen(id: String) {
     androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalUriHandler provides links) {
     BoxWithConstraints(Modifier.fillMaxSize().fileDrop()) {
         val col = minOf(if (Graph.prefs.transcriptWidth == "wide") 1240.dp else M.column, maxWidth - 64.dp)
-        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+        // the messages run under the input, which floats over them half see-through: no edge the text
+        // stops at, and the padding keeps the last line clear of it
+        val dens = androidx.compose.ui.platform.LocalDensity.current
+        var bottomPad by remember { mutableStateOf(0.dp) }
+        Box(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize()) {
                 SelectionContainer {
                     LazyColumn(Modifier.fillMaxSize(), state = list, horizontalAlignment = Alignment.CenterHorizontally) {
                         item { Spacer(Modifier.height(32.dp)) }
@@ -145,12 +160,14 @@ fun ChatScreen(id: String) {
                             }
                         }
                         if (busy) item(key = "working") { Box(Modifier.width(col).padding(top = 6.dp, bottom = 10.dp)) { Working(chat.messages.lastOrNull(), id) } }
-                        item { Spacer(Modifier.height(24.dp)) }
+                        // right after a reply ends the mascot reacts for a moment, by its eyes (as on the phone)
+                        item(key = "outcome") { Box(Modifier.width(col)) { OutcomeNote(id, busy) } }
+                        item { Spacer(Modifier.height(24.dp + bottomPad)) }
                     }
                 }
                 val scope = rememberCoroutineScope()
                 androidx.compose.animation.AnimatedVisibility(
-                    !stick, Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+                    !stick, Modifier.align(Alignment.BottomCenter).padding(bottom = bottomPad + 10.dp),
                     enter = androidx.compose.animation.fadeIn(tween(140)) + androidx.compose.animation.scaleIn(tween(140), initialScale = 0.8f),
                     exit = androidx.compose.animation.fadeOut(tween(140)) + androidx.compose.animation.scaleOut(tween(140), targetScale = 0.8f),
                 ) {
@@ -164,11 +181,16 @@ fun ChatScreen(id: String) {
                 chat.loadError?.let { Txt(it, color = c.danger, modifier = Modifier.align(Alignment.Center)) }
                 androidx.compose.foundation.VerticalScrollbar(
                     androidx.compose.foundation.rememberScrollbarAdapter(list),
-                    Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(end = 3.dp, top = 4.dp, bottom = 4.dp).width(8.dp),
+                    Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(end = 3.dp, top = 4.dp, bottom = bottomPad + 4.dp).width(8.dp),
                     style = androidx.compose.foundation.defaultScrollbarStyle().copy(unhoverColor = c.border, hoverColor = c.textDim, thickness = 6.dp),
                 )
             }
-            Column(Modifier.width(col + M.composerExtra * 2).padding(bottom = 14.dp, top = 6.dp)) {
+            // the top darkens the messages that scroll under it, fading out instead of a hard edge
+            Box(
+                Modifier.align(Alignment.TopCenter).fillMaxWidth().height(44.dp)
+                    .background(androidx.compose.ui.graphics.Brush.verticalGradient(0f to c.bg.copy(alpha = 0.92f), 1f to c.bg.copy(alpha = 0f))),
+            )
+            Column(Modifier.align(Alignment.BottomCenter).width(col + M.composerExtra * 2).onSizeChanged { bottomPad = with(dens) { it.height.toDp() } }.padding(bottom = 14.dp, top = 6.dp)) {
                 HelperClouds(id)
                 when {
                     perm != null && perm.permission == "task" -> TaskPermissionPanel(perm)
@@ -177,7 +199,7 @@ fun ChatScreen(id: String) {
                         PermissionPanel(perm, agent?.let(Helpers::label) ?: if (perm.sessionID != id) Helpers.label(null) else null, agent.orEmpty())
                     }
                     question != null -> QuestionPanel(question)
-                    else -> Composer(big = false, busy = busy, onSend = { t, files -> Graph.scope.launchIt { hub.send(id, t, files) } }, onStop = { hub.stop(id) }, placeholder = if (busy) "Add to the queue…" else "Reply to cl0udly")
+                    else -> Composer(big = false, busy = busy, onSend = { t, files -> Graph.scope.launchIt { hub.send(id, t, files) } }, onStop = { hub.stop(id) }, placeholder = if (busy) "Add to the queue…" else "Reply to cl0udly", draftKey = id, floating = true)
                 }
             }
         }
@@ -244,9 +266,7 @@ internal fun AssistantMessage(m: ChatMessage) {
         }
         m.info.errorMessage?.takeIf { m.info.errorName != "MessageAbortedError" }?.let {
             if (app.cl0udly.data.Limits.isLimit(m.info.errorName, it)) LimitCard(it, m.info.sessionID)
-            else Row(Modifier.clip(Oc.round(10.dp)).background(c.danger.copy(alpha = 0.12f)).padding(horizontal = 14.dp, vertical = 10.dp)) {
-                Txt(it, size = 14.sp, color = c.danger)
-            }
+            else ErrorCard(m.info.errorName, it, m.info.sessionID)
         }
         val text = groups.filterIsInstance<Group.Text>().joinToString("\n\n") { it.text }
         val pics = remember(text, m.parts.size) { picturesIn(m, text) }
@@ -265,6 +285,9 @@ internal fun AssistantMessage(m: ChatMessage) {
         ) {
             var copied by remember { mutableStateOf(false) }
             Box(Modifier.size(30.dp).hoverTap(Oc.round(8.dp)) { copyText(text); copied = true }, contentAlignment = Alignment.Center) { Icon(if (copied) Ic.Check else Ic.Copy, 16.dp, c.textDim) }
+            // read aloud, as on the phone; the same button stops it
+            val reading = app.cl0udly.data.Speech.reading == text
+            Box(Modifier.size(30.dp).hoverTap(Oc.round(8.dp), reading) { app.cl0udly.data.Speech.toggle(text) }, contentAlignment = Alignment.Center) { Icon(if (reading) Ic.Stop else Ic.Volume, 16.dp, c.textDim) }
             Spacer(Modifier.width(8.dp))
             Txt(m.info.modelName.orEmpty(), size = 13.sp, color = c.textDim)
         }
@@ -449,6 +472,26 @@ private fun Dots() {
 }
 
 /** What the agent is doing now: the cl0udly cloud at work, or the measured "working 46s ›" line. */
+@Composable
+private fun OutcomeNote(id: String, busy: Boolean) {
+    val c = Oc.c
+    val outcome = app.cl0udly.ui.cloud.MascotSignals.outcome
+    var reacting by remember { mutableStateOf(false) }
+    LaunchedEffect(outcome) { if (outcome != null && System.currentTimeMillis() - outcome.at < 1000) { reacting = true; delay(1800); reacting = false } }
+    androidx.compose.animation.AnimatedVisibility(
+        !busy && reacting && outcome != null && outcome.sessionId == id && Oc.look.clouds,
+        enter = androidx.compose.animation.fadeIn(tween(120)), exit = androidx.compose.animation.fadeOut(tween(160)),
+    ) {
+        var last by remember { mutableStateOf(outcome) }
+        if (outcome != null) last = outcome
+        Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            app.cl0udly.ui.cloud.CloudOutcomeGlyph(last?.ok == true, 28.dp)
+            Spacer(Modifier.width(10.dp))
+            Txt(if (last?.ok == true) "Done" else "That didn't work", size = 14.sp, color = c.textDim)
+        }
+    }
+}
+
 @Composable
 private fun Working(last: ChatMessage?, id: String) {
     val c = Oc.c
@@ -644,6 +687,42 @@ private fun smoothText(target: String, live: Boolean): String {
  * The model's allowance ran out: not a red error but what happened and a way on: another free
  * model, with the last message sent to it again.
  */
+/** What went wrong in plain words, a way on, and the raw message under "Details" (as on the phone). */
+@Composable
+private fun ErrorCard(name: String?, message: String, sessionId: String) {
+    val c = Oc.c
+    val m = message.lowercase()
+    val (title, hint) = when {
+        name == "ProviderAuthError" || m.contains("unauthorized") || m.contains("api key") || m.contains("401") ->
+            "The model's service didn't accept the sign-in" to "Sign in again in Settings, or pick a model that needs no account."
+        m.contains("context") && (m.contains("length") || m.contains("too long") || m.contains("maximum") || m.contains("window")) ->
+            "This chat got too long for the model" to "Type /compact to free up room, or switch to a model with a bigger memory."
+        m.contains("function.name") || m.contains("expected '") || m.contains("tool call") || m.contains("invalid json") ->
+            "The model sent a broken step" to "It happens with some free models. Try again, or pick another model."
+        m.contains("timeout") || m.contains("timed out") || m.contains("network") || m.contains("fetch failed") || m.contains("econn") || m.contains("unable to connect") ->
+            "Couldn't reach the model's server" to "Check the connection and try again."
+        m.contains("overloaded") || m.contains("503") || m.contains("502") || m.contains("unavailable") ->
+            "The model's server is busy right now" to "Try again in a moment, or pick another model."
+        else -> "Something went wrong with this reply" to "Try again, or pick another model."
+    }
+    var details by remember { mutableStateOf(false) }
+    Column(Modifier.widthIn(max = 560.dp).clip(Oc.round(12.dp)).background(c.surface).border(1.dp, c.danger.copy(alpha = 0.3f), Oc.round(12.dp)).padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Ic.Info, 16.dp, c.danger); Spacer(Modifier.width(10.dp))
+            Txt(title, size = 14.sp, weight = FontWeight.Medium)
+        }
+        Txt(hint, size = 13.sp, color = c.textDim, modifier = Modifier.padding(top = 6.dp))
+        Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.clip(Oc.round(8.dp)).background(c.text).hoverTap(Oc.round(8.dp)) { Graph.hub.retryLast(sessionId) }.padding(horizontal = 14.dp, vertical = 7.dp)) {
+                Txt("Try again", size = 13.sp, color = c.bg, weight = FontWeight.Medium)
+            }
+            Spacer(Modifier.width(14.dp))
+            Txt(if (details) "Hide details" else "Details", size = 13.sp, color = c.textDim, modifier = Modifier.hoverTap(Oc.round(6.dp)) { details = !details }.padding(4.dp))
+        }
+        if (details) Txt(message, size = 12.sp, color = c.textDim, family = Oc.mono, modifier = Modifier.padding(top = 8.dp))
+    }
+}
+
 @Composable
 private fun LimitCard(message: String, sessionId: String) {
     val c = Oc.c

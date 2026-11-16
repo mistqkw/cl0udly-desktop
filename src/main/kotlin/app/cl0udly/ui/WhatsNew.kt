@@ -33,10 +33,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /** This build's version; the "what's new" window and the update check go by it. */
-const val APP_VERSION = "0.0.1 beta-1"
+const val APP_VERSION = "0.0.1 beta-2"
 
 /** What each version brought, said simply, like on the phone. Add a line per feature when it lands. */
 private val NOTES: Map<String, List<String>> = mapOf(
+    "0.0.1 beta-2" to listOf(
+        "New look: a night sky with pixel clouds, and a new launch screen",
+        "Search (Ctrl+K) finds words inside messages and in memory",
+        "A speaker under each reply reads it aloud",
+        "A card says when the server or the internet is gone; a stopped server restarts on a click",
+        "The cloud reacts when a reply is done or fails",
+        "The sidebar rows can be reordered in Settings → Appearance",
+        "Code in replies is highlighted, with line numbers; a deleted chat can be brought back",
+        "Fixed: the \"OK\" error with GitHub Copilot, broken replies from GPT-OSS, the chat jumping down when you scroll up",
+    ),
     "0.0.1 beta-1" to listOf(
         "cl0udly on the computer: chats, Code with projects, a terminal, a browser and files side by side",
         "Chats and memory move between the phone and the computer by themselves when you're home",

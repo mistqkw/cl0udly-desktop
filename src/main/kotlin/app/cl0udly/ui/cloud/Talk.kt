@@ -77,7 +77,7 @@ fun TalkHost() {
             val reply = chat.messages.lastOrNull { !it.info.isUser }
             val answer = reply?.parts?.filter { it.type == "text" }?.joinToString("\n") { it.text }.orEmpty().ifBlank { reply?.info?.errorMessage.orEmpty() }
             caption = answer
-            val p = withContext(Dispatchers.IO) { say(answer) }
+            val p = withContext(Dispatchers.IO) { app.cl0udly.data.Speech.say(answer) }
             if (p == null) { phase = "idle"; return@launch }
             speech = p; phase = "speaking"
             withContext(Dispatchers.IO) { p.waitFor() }
@@ -133,24 +133,4 @@ fun TalkHost() {
             }
         }
     }
-}
-
-/** Reads [text] aloud with whatever the system has, a little higher, like a cloud; null when it has nothing. */
-private fun say(text: String): Process? {
-    val clean = text.replace(Regex("```[\\s\\S]*?```"), " ").replace(Regex("[`*#>_|\\[\\]]"), "").replace(Regex("\\((/|https?://)[^)]*\\)"), "").take(2500).trim()
-    if (clean.isEmpty()) return null
-    val ru = clean.count { it in 'а'..'я' || it in 'А'..'Я' } > clean.length / 5
-    fun has(n: String) = (System.getenv("PATH") ?: "").split(java.io.File.pathSeparatorChar).any { java.io.File(it, n).canExecute() }
-    val cmd = when {
-        // macOS and Windows have a voice built in
-        app.cl0udly.data.Os.isMac -> listOf("say", clean)
-        app.cl0udly.data.Os.isWindows -> listOf(
-            "powershell", "-NoProfile", "-Command",
-            "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak(\$env:CL0UDLY_SAY)",
-        )
-        has("spd-say") -> listOf("spd-say", "-w", "-l", if (ru) "ru" else "en", "-p", "30", clean)
-        has("espeak-ng") -> listOf("espeak-ng", "-v", if (ru) "ru" else "en-us", "-p", "65", "-s", "165", clean)
-        else -> return null
-    }
-    return runCatching { ProcessBuilder(cmd).apply { environment()["CL0UDLY_SAY"] = clean }.redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start() }.getOrNull()
 }

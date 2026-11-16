@@ -101,13 +101,15 @@ fun Modifier.hoverTap(shape: Shape, selected: Boolean = false, enabled: Boolean 
 /** Line icons on a 24 grid, drawn with a 1.6 stroke like the ones in Claude desktop. */
 enum class Ic(val d: String, val fill: Boolean = false) {
     Plus("M12 5v14M5 12h14"),
+    Volume("M11 5 6 9H3v6h3l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"),
     ArrowDown("M12 5v14M6 13l6 6 6-6"),
     Search("M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zM15.5 15.5 20 20"),
     Sidebar("M4 5h16v14H4zM9.5 5v14"),
     Menu("M4 7h16M4 12h16M4 17h10"),
     Back("M14.5 6 8.5 12l6 6"),
     Forward("M9.5 6l6 6-6 6"),
-    Chat("M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v6a2.5 2.5 0 0 1-2.5 2.5H11l-4 4v-4h0.5A2.5 2.5 0 0 1 5 12.5z"),
+    // a speech bubble shaped like the mascot's cloud, as on the phone
+    Chat("M7 18H6a4 4 0 0 1-.6-7.95A5 5 0 0 1 12 6.2a4.6 4.6 0 0 1 7.6 3.9A4 4 0 0 1 18 18h-6l-4 3z"),
     Code("M9 8l-4 4 4 4M15 8l4 4-4 4M13.5 5l-3 14"),
     Folder("M3.5 7.5A1.5 1.5 0 0 1 5 6h4l2 2h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z"),
     Box("M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"),
@@ -160,14 +162,29 @@ enum class Ic(val d: String, val fill: Boolean = false) {
 }
 
 private val parsed = HashMap<Ic, androidx.compose.ui.graphics.Path>()
+private val bodies = HashMap<Ic, androidx.compose.ui.graphics.Path?>()
 
+/** The closed shapes of an icon (its sub-paths ending in "z"): they get the soft fill. */
+private fun bodyOf(ic: Ic): androidx.compose.ui.graphics.Path? {
+    val closed = Regex("""[Mm][^Mm]*""").findAll(ic.d).map { it.value.trim() }.filter { it.endsWith("z", true) }.joinToString(" ")
+    return closed.takeIf { it.isNotEmpty() }?.let { PathParser().parsePathString(it).toPath() }
+}
+
+/**
+ * cl0udly's icons, as on the phone: a rounded line, and every closed shape (a folder, a page, a bubble)
+ * carries a soft fill of the same color behind it, so the set reads as ours rather than a stock outline set.
+ */
 @Composable
 fun Icon(ic: Ic, size: Dp = 18.dp, color: Color = Oc.c.text, modifier: Modifier = Modifier, stroke: Float = 1.6f) {
     Canvas(modifier.size(size)) {
         val path = parsed.getOrPut(ic) { PathParser().parsePathString(ic.d).toPath() }
+        val body = bodies.getOrPut(ic) { if (ic.fill) null else bodyOf(ic) }
         scale(this.size.width / 24f, pivot = androidx.compose.ui.geometry.Offset.Zero) {
             if (ic.fill) drawPath(path, color)
-            else drawPath(path, color, style = Stroke(stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            else {
+                body?.let { drawPath(it, color.copy(alpha = color.alpha * 0.16f)) }
+                drawPath(path, color, style = Stroke(stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            }
         }
     }
 }

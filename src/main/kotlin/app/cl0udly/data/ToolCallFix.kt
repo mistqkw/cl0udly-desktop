@@ -61,6 +61,13 @@ object ToolCallFix {
             else method(ex.requestMethod, body.toRequestBody(ex.requestHeaders.getFirst("content-type")?.toMediaTypeOrNull()))
         }.build()
         client.newCall(req).execute().use { r ->
+            if (!r.isSuccessful) {
+                val b = errorBody(path.substringBefore('/'), r.code, r.body.string()).toByteArray()
+                ex.responseHeaders.add("Content-Type", "application/json")
+                ex.sendResponseHeaders(r.code, b.size.toLong())
+                ex.responseBody.use { it.write(b) }
+                return
+            }
             val type = r.header("content-type") ?: "application/json"
             ex.responseHeaders.add("Content-Type", type)
             ex.responseHeaders.add("Cache-Control", "no-store")
@@ -77,6 +84,24 @@ object ToolCallFix {
             }
             out.close()
         }
+    }
+
+    /**
+     * A refused request as the OpenAI error the SDK reads. Copilot answers errors in plain text, and the
+     * SDK, unable to parse it, showed only the status line: the reason
+     * goes in readable words, with what the provider said after it.
+     */
+    fun errorBody(provider: String, code: Int, raw: String): String {
+        val said = raw.trim().take(300)
+        val hint = when {
+            provider == "copilot-chat" && code == 401 -> "GitHub didn't accept the sign-in. Sign in to GitHub again in the model list."
+            provider == "copilot-chat" && code == 403 -> "This GitHub account can't use Copilot. Turn on Copilot Free at github.com/settings/copilot, then try again."
+            provider == "copilot-chat" && code == 400 && said.contains("model", true) -> "Copilot doesn't offer this model on your plan. Pick another one."
+            code == 429 -> "Too many requests to the free model. Wait a minute and try again."
+            else -> "The model's server refused the request ($code)."
+        }
+        val msg = if (said.isEmpty()) hint else "$hint ($code: $said)"
+        return JsonObject(mapOf("error" to JsonObject(mapOf("message" to JsonPrimitive(msg), "code" to JsonPrimitive(code))))).toString()
     }
 
     /** What one streamed answer has passed on so far. */

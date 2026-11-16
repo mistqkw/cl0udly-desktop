@@ -203,20 +203,39 @@ fun SearchOverlay() {
             if (tab == "projects") emptyList()
             else if (q.isBlank()) all.take(30) else all.filter { it.displayTitle.contains(q, true) || it.directory.contains(q, true) }.take(30)
         }
+        // inside the messages and in memory too, as on the phone; a short pause so typing doesn't query every key
+        var hits by remember { mutableStateOf<List<app.cl0udly.data.Search.Hit>>(emptyList()) }
+        var memHits by remember { mutableStateOf<List<app.cl0udly.data.Search.MemoryHit>>(emptyList()) }
+        LaunchedEffect(q, tab) {
+            val t = q.trim()
+            if (t.length < 2 || tab == "projects") { hits = emptyList(); memHits = emptyList(); return@LaunchedEffect }
+            delay(180)
+            val ids = all.map { it.id }.toSet()
+            hits = app.cl0udly.data.Search.chats(t).filter { it.sessionId in ids }
+            memHits = if (tab == "all") app.cl0udly.data.Search.memory(t) else emptyList()
+        }
         val list = rememberLazyListState()
-        LaunchedEffect(sel) { if (found.isNotEmpty()) list.animateScrollToItem(sel.coerceIn(0, found.lastIndex)) }
+        val total = if (tab == "projects") dirs.size else found.size + hits.size + memHits.size
+        LaunchedEffect(sel) {
+            if (total == 0) return@LaunchedEffect
+            // the section labels sit between the groups
+            val row = sel + (if (sel >= found.size && hits.isNotEmpty()) 1 else 0) + (if (sel >= found.size + hits.size && memHits.isNotEmpty()) 1 else 0)
+            list.animateScrollToItem(row.coerceIn(0, (list.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)))
+        }
         fun open(i: Int) {
-            if (tab == "projects") dirs.getOrNull(i)?.let { d -> Nav.search = false; Graph.prefs.mode = "code"; Nav.project = d; Graph.prefs.addProject(d); Nav.go(Screen.Home) }
-            else found.getOrNull(i)?.let { Nav.search = false; Nav.go(Screen.Chat(it.id)) }
+            if (tab == "projects") { dirs.getOrNull(i)?.let { d -> Nav.search = false; Graph.prefs.mode = "code"; Nav.project = d; Graph.prefs.addProject(d); Nav.go(Screen.Home) }; return }
+            found.getOrNull(i)?.let { Nav.search = false; Nav.go(Screen.Chat(it.id)); return }
+            hits.getOrNull(i - found.size)?.let { Nav.search = false; Nav.go(Screen.Chat(it.sessionId)); return }
+            if (memHits.getOrNull(i - found.size - hits.size) != null) { Nav.search = false; Nav.go(Screen.Memory) }
         }
         Column(Modifier.width(640.dp).clip(Oc.round(16.dp)).background(c.surface).border(1.dp, c.border, Oc.round(16.dp))) {
             Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Ic.Search, 18.dp, c.textDim)
                 Spacer(Modifier.width(12.dp))
-                Field(q, { q = it; sel = 0 }, "Search chats and sessions", Modifier.weight(1f).focusRequester(focus).onPreviewKeyEvent { e ->
+                Field(q, { q = it; sel = 0 }, "Search chats, messages and memory", Modifier.weight(1f).focusRequester(focus).onPreviewKeyEvent { e ->
                     if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     when (e.key) {
-                        Key.DirectionDown -> { sel = (sel + 1).coerceAtMost((if (tab == "projects") dirs.lastIndex else found.lastIndex).coerceAtLeast(0)); true }
+                        Key.DirectionDown -> { sel = (sel + 1).coerceAtMost((total - 1).coerceAtLeast(0)); true }
                         Key.DirectionUp -> { sel = (sel - 1).coerceAtLeast(0); true }
                         Key.Enter -> { open(sel); true }
                         Key.Escape -> { Nav.search = false; true }
@@ -252,11 +271,31 @@ fun SearchOverlay() {
                     ) {
                         Icon(if (Graph.hub.isChat(s)) Ic.Chat else Ic.Code, 17.dp, c.textDim)
                         Spacer(Modifier.width(12.dp))
-                        Txt(s.displayTitle, size = 15.sp, maxLines = 1, modifier = Modifier.weight(1f))
+                        androidx.compose.material3.Text(marked(s.displayTitle, q.trim(), c.accent), color = c.text, fontSize = 15.sp, maxLines = 1, fontFamily = Oc.body, modifier = Modifier.weight(1f))
                         Txt(ago(s.time.updated), size = 13.sp, color = c.textDim)
                     }
                 }
-                if (found.isEmpty() && (tab != "projects" || dirs.isEmpty())) item { Txt("Nothing found", size = 14.sp, color = c.textDim, modifier = Modifier.padding(16.dp)) }
+                if (hits.isNotEmpty()) {
+                    item(key = "h-msg") { Txt("In messages", size = 12.sp, color = c.textDim, modifier = Modifier.padding(start = 12.dp, top = 12.dp, bottom = 4.dp)) }
+                    itemsIndexed(hits, key = { i, _ -> "m$i" }) { i, h ->
+                        val k = found.size + i
+                        Column(Modifier.fillMaxWidth().hoverTap(Oc.round(10.dp), k == sel) { open(k) }.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            Txt(h.title.ifBlank { "Untitled" } + "   " + ago(h.time), size = 12.sp, color = c.textDim, maxLines = 1)
+                            androidx.compose.material3.Text(marked((if (h.user) "You: " else "") + h.snippet, q.trim(), c.accent), color = c.text, fontSize = 14.sp, maxLines = 2, lineHeight = 20.sp, fontFamily = Oc.body)
+                        }
+                    }
+                }
+                if (memHits.isNotEmpty()) {
+                    item(key = "h-mem") { Txt("In memory", size = 12.sp, color = c.textDim, modifier = Modifier.padding(start = 12.dp, top = 12.dp, bottom = 4.dp)) }
+                    itemsIndexed(memHits, key = { i, _ -> "k$i" }) { i, h ->
+                        val k = found.size + hits.size + i
+                        Column(Modifier.fillMaxWidth().hoverTap(Oc.round(10.dp), k == sel) { open(k) }.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            Txt(h.shelf, size = 12.sp, color = c.textDim, maxLines = 1)
+                            androidx.compose.material3.Text(marked(h.line, q.trim(), c.accent), color = c.text, fontSize = 14.sp, maxLines = 2, lineHeight = 20.sp, fontFamily = Oc.body)
+                        }
+                    }
+                }
+                if (found.isEmpty() && hits.isEmpty() && memHits.isEmpty() && (tab != "projects" || dirs.isEmpty())) item { Txt("Nothing found", size = 14.sp, color = c.textDim, modifier = Modifier.padding(16.dp)) }
             }
         }
         LaunchedEffect(Unit) { delay(30); runCatching { focus.requestFocus() } }
@@ -290,6 +329,22 @@ fun Toasts(modifier: Modifier) {
         }
     }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        // "Chat deleted · Undo" for a few seconds after a delete
+        val u = Graph.hub.undo
+        AnimatedVisibility(u != null, enter = fadeIn(tween(120)) + slideInVertically(tween(140)) { it / 2 }, exit = fadeOut(tween(100))) {
+            var last by remember { mutableStateOf(u) }
+            if (u != null) last = u
+            Row(
+                Modifier.clip(Oc.round(12.dp)).background(c.surfaceHigh).border(1.dp, c.border, Oc.round(12.dp)).padding(start = 16.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Txt(last?.text.orEmpty(), size = 14.sp)
+                Spacer(Modifier.width(14.dp))
+                Box(Modifier.hoverTap(Oc.round(8.dp)) { last?.undo?.invoke(); Graph.hub.undo = null }.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    Txt("Undo", size = 14.sp, weight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                }
+            }
+        }
         shown.forEach { (id, t) ->
             androidx.compose.runtime.key(id) {
                 var vis by remember { mutableStateOf(false) }
@@ -299,8 +354,6 @@ fun Toasts(modifier: Modifier) {
                         Modifier.widthIn(max = 560.dp).clip(Oc.round(12.dp)).background(c.surfaceHigh).border(1.dp, c.border, Oc.round(12.dp)).padding(horizontal = 16.dp, vertical = 11.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Box(Modifier.size(7.dp).clip(CircleShape).background(c.danger))
-                        Spacer(Modifier.width(10.dp))
                         Txt(t, size = 14.sp, maxLines = 3)
                     }
                 }
@@ -337,4 +390,17 @@ fun QuickEntry() {
 
 fun kotlinx.coroutines.CoroutineScope.launchSend(dir: String, text: String, files: List<String> = emptyList()) = launch {
     Graph.hub.startAndSend(dir, text, files)?.let { Nav.go(Screen.Chat(it)) }
+}
+
+/** The text with every match of [q] in the accent color and a little bolder, so you see why it was found. */
+private fun marked(text: String, q: String, accent: androidx.compose.ui.graphics.Color) = androidx.compose.ui.text.buildAnnotatedString {
+    if (q.length < 2) { append(text); return@buildAnnotatedString }
+    var at = 0
+    while (true) {
+        val i = text.indexOf(q, at, ignoreCase = true)
+        if (i < 0) { append(text.substring(at)); break }
+        append(text.substring(at, i))
+        pushStyle(androidx.compose.ui.text.SpanStyle(color = accent, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)); append(text.substring(i, i + q.length)); pop()
+        at = i + q.length
+    }
 }

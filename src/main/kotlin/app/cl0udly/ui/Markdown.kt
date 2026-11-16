@@ -5,6 +5,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -197,20 +199,51 @@ fun Markdown(text: String, modifier: Modifier = Modifier) {
 fun CodeBlock(lang: String, code: String) {
     val c = Oc.c
     var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) { if (copied) { kotlinx.coroutines.delay(1400); copied = false } }
+    val text = code.trimEnd('\n')
+    val lines = remember(text) { text.lines().size }
+    val styled = remember(text, lang, c) { highlight(text, lang, c) }
     Column(Modifier.fillMaxWidth().clip(Oc.round(12.dp)).background(c.codeBg).border(1.dp, c.border, Oc.round(12.dp))) {
-        Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Txt(lang.ifBlank { "text" }, size = 12.sp, color = c.textDim, family = Oc.mono, modifier = Modifier.weight(1f))
+            if (lines > 1) Txt("$lines lines", size = 12.sp, color = c.textDim.copy(alpha = 0.7f), modifier = Modifier.padding(end = 6.dp))
             Row(Modifier.hoverTap(Oc.round(6.dp)) { copyText(code); copied = true }.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(if (copied) Ic.Check else Ic.Copy, 14.dp, c.textDim)
+                // the icon turns into a check in place, without the row jumping
+                androidx.compose.animation.AnimatedContent(copied, label = "copy", transitionSpec = {
+                    (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(90)) + androidx.compose.animation.scaleIn(androidx.compose.animation.core.tween(140), initialScale = 0.6f)) togetherWith
+                        androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(70))
+                }) { d -> Icon(if (d) Ic.Check else Ic.Copy, 14.dp, if (d) c.ok else c.textDim) }
                 Spacer(Modifier.width(6.dp))
-                Txt(if (copied) "Copied" else "Copy", size = 12.sp, color = c.textDim)
+                Txt(if (copied) "Copied" else "Copy", size = 12.sp, color = if (copied) c.ok else c.textDim, modifier = Modifier.width(44.dp))
+            }
+            // save the snippet as a file, named by its language
+            Row(Modifier.hoverTap(Oc.round(6.dp)) { saveCode(code, lang) }.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Ic.Download, 14.dp, c.textDim)
+                Spacer(Modifier.width(6.dp))
+                Txt("Save", size = 12.sp, color = c.textDim)
             }
         }
-        Text(
-            code, modifier = Modifier.horizontalScroll(rememberScrollState()).padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 14.dp),
-            style = TextStyle(color = c.text, fontFamily = Oc.mono, fontSize = 14.sp, lineHeight = 21.sp), softWrap = false,
-        )
+        Box(Modifier.fillMaxWidth().height(1.dp).background(c.border.copy(alpha = 0.6f)))
+        Row(Modifier.padding(top = 10.dp, bottom = 14.dp)) {
+            // numbers stay put while the code scrolls sideways
+            if (lines > 1) Text(
+                (1..lines).joinToString("\n"), modifier = Modifier.padding(start = 12.dp, end = 12.dp),
+                style = TextStyle(color = c.textDim.copy(alpha = 0.45f), fontFamily = Oc.mono, fontSize = 13.sp, lineHeight = 21.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End), softWrap = false,
+            )
+            Text(
+                styled, modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()).padding(start = if (lines > 1) 0.dp else 14.dp, end = 14.dp),
+                style = TextStyle(color = c.text, fontFamily = Oc.mono, fontSize = 14.sp, lineHeight = 21.sp), softWrap = false,
+            )
+        }
     }
+}
+
+private fun saveCode(code: String, lang: String) {
+    val ext = mapOf("kotlin" to "kt", "python" to "py", "javascript" to "js", "typescript" to "ts", "bash" to "sh", "shell" to "sh", "ruby" to "rb", "rust" to "rs", "markdown" to "md", "yaml" to "yml")[lang.lowercase()] ?: lang.lowercase().ifBlank { "txt" }
+    val d = java.awt.FileDialog(null as java.awt.Frame?, "Save code", java.awt.FileDialog.SAVE).apply { file = "snippet.$ext"; isVisible = true }
+    val name = d.file ?: return
+    runCatching { java.io.File(d.directory, name).writeText(code) }
+        .onSuccess { app.cl0udly.Graph.hub.toasts.tryEmit("Saved $name") }.onFailure { app.cl0udly.Graph.hub.toasts.tryEmit("Couldn't save the file") }
 }
 
 fun copyText(s: String) {

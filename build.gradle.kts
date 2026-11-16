@@ -44,6 +44,8 @@ dependencies {
     // the tray icon: StatusNotifierItem over D-Bus, what Quickshell, Waybar and KDE show
     implementation("com.github.hypfvieh:dbus-java-core:5.1.1")
     implementation("com.github.hypfvieh:dbus-java-transport-native-unixsocket:5.1.1")
+    // search through message text: OpenCode keeps chats in SQLite, read without touching the server
+    implementation("org.xerial:sqlite-jdbc:3.41.2.2")
 }
 
 compose.desktop {
@@ -54,7 +56,7 @@ compose.desktop {
             targetFormats(TargetFormat.AppImage, TargetFormat.Deb, TargetFormat.Msi, TargetFormat.Dmg)
             packageName = "cl0udly"
             packageVersion = "0.0.1"
-            modules("java.net.http", "jdk.httpserver", "jdk.unsupported", "jdk.jsobject", "java.scripting", "jdk.xml.dom", "jdk.unsupported.desktop", "jdk.security.auth")
+            modules("java.net.http", "jdk.httpserver", "jdk.unsupported", "jdk.jsobject", "java.scripting", "jdk.xml.dom", "jdk.unsupported.desktop", "jdk.security.auth", "java.sql")
             linux { iconFile.set(project.file("src/main/resources/icon.png")) }
             windows {
                 iconFile.set(project.file("packaging/icon.ico"))

@@ -11,6 +11,8 @@ import kotlin.properties.ReadWriteProperty
 import kotlin.reflect.KProperty
 
 /** Where the app keeps its files: XDG folders, like every Linux program. */
+val SIDEBAR_ROWS = listOf("search", "projects", "memory", "customize")
+
 object Paths {
     private val home = System.getProperty("user.home")
     // XDG folders on Linux, AppData on Windows, Application Support on macOS
@@ -117,6 +119,21 @@ class Prefs(private val file: File = File(Paths.config, "prefs.json")) {
 
     /** Pinned session ids, newest first. */
     var pinned by str("")
+    /** Sidebar rows turned off in Appearance → Sidebar, one key per line. */
+    var sidebarHidden by str("")
+    val sidebarHiddenSet get() = sidebarHidden.split('\n').filter { it.isNotBlank() }.toSet()
+    fun sidebarShows(key: String) = key !in sidebarHiddenSet
+    fun toggleSidebar(key: String) { sidebarHidden = (if (key in sidebarHiddenSet) sidebarHiddenSet - key else sidebarHiddenSet + key).joinToString("\n") }
+    /** The order of the sidebar's top rows (as the phone's side menu); keys it doesn't know yet go at the end. */
+    var sidebarOrder by str("search,projects,memory,customize")
+    val sidebarRows get() = (sidebarOrder.split(',').filter { it in SIDEBAR_ROWS } + SIDEBAR_ROWS).distinct()
+    fun moveSidebar(key: String, by: Int) {
+        val o = sidebarRows.toMutableList()
+        val i = o.indexOf(key); val j = i + by
+        if (i < 0 || j !in o.indices) return
+        o.removeAt(i); o.add(j, key)
+        sidebarOrder = o.joinToString(",")
+    }
     /** Recently picked models ("provider/model"), the top four get number keys in the picker. */
     var recentModels by str("")
     /** Models hidden from the picker (OpenCode desktop: Settings → Models toggles). */
@@ -200,9 +217,17 @@ class Prefs(private val file: File = File(Paths.config, "prefs.json")) {
     fun toggleHelper(key: String) { helperModels = (if (key in helperModelList) helperModelList - key else helperModelList + key).joinToString("\n") }
     fun setHelperAlways(key: String, on: Boolean) { helperAlways = (if (on) helperAlwaysSet + key else helperAlwaysSet - key).joinToString("\n") }
 
+    /** What you were typing in a chat, kept until you send it or erase it. */
+    fun draft(sessionId: String) = values["draft_$sessionId"].orEmpty()
+    fun setDraft(sessionId: String, text: String) {
+        if (values["draft_$sessionId"].orEmpty() == text) return
+        if (text.isBlank()) values.remove("draft_$sessionId") else values["draft_$sessionId"] = text
+        save()
+    }
     fun togglePin(id: String) { pinned = (if (id in pinnedList) pinnedList - id else listOf(id) + pinnedList).joinToString("\n") }
     val recentModelList: List<String> get() = recentModels.split('\n').filter { it.isNotBlank() }
-    fun useModel(key: String) { recentModels = (listOf(key) + recentModelList.filter { it != key }).take(8).joinToString("\n") }
+    /** A model already in the picker's short list keeps its place: picking the second one doesn't make it first. */
+    fun useModel(key: String) { if (key in recentModelList.take(4)) return; recentModels = (listOf(key) + recentModelList.filter { it != key }).take(8).joinToString("\n") }
     val hiddenModelSet: Set<String> get() = hiddenModels.split('\n').filter { it.isNotBlank() }.toSet()
     fun toggleHidden(key: String) { hiddenModels = (if (key in hiddenModelSet) hiddenModelSet - key else hiddenModelSet + key).joinToString("\n") }
     fun addProject(dir: String) { projects = (listOf(dir) + projectList.filter { it != dir }).take(20).joinToString("\n") }

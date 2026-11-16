@@ -102,7 +102,11 @@ fun WindowScope.Shell(onClose: () -> Unit) {
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     AnimatedContent(
                         Nav.screen, label = "screen",
-                        transitionSpec = { fadeIn(tween(130)) togetherWith fadeOut(tween(90)) },
+                        // the new screen rises a little out of the old one as it fades in, as on the phone
+                        transitionSpec = {
+                            (fadeIn(tween(150)) + androidx.compose.animation.scaleIn(tween(190, easing = androidx.compose.animation.core.FastOutSlowInEasing), initialScale = 0.97f)) togetherWith
+                                (fadeOut(tween(100)) + androidx.compose.animation.scaleOut(tween(150), targetScale = 1.02f))
+                        },
                         contentKey = { it::class },
                     ) { s ->
                         when (s) {
@@ -281,10 +285,15 @@ private fun Sidebar() {
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(horizontal = M.listInset).padding(top = 8.dp)) {
             NavRow(Ic.Plus, if (prefs.mode == "code") "New session" else "New chat", hint = "Ctrl+N") { Nav.go(Screen.Home) }
-            NavRow(Ic.Search, "Search", hint = "Ctrl+K") { Nav.search = true }
-            NavRow(Ic.Folder, "Projects", selected = Nav.screen == Screen.Projects) { Nav.go(Screen.Projects) }
-            NavRow(MEMORY_ICON, "Memory", selected = Nav.screen == Screen.Memory) { Nav.go(Screen.Memory) }
-            NavRow(Ic.Sliders, "Customize") { Nav.settings = "capabilities" }
+            // in the order chosen in Settings → Appearance → Sidebar
+            prefs.sidebarRows.filter { prefs.sidebarShows(it) }.forEach { k ->
+                when (k) {
+                    "search" -> NavRow(Ic.Search, "Search", hint = "Ctrl+K") { Nav.search = true }
+                    "projects" -> NavRow(Ic.Folder, "Projects", selected = Nav.screen == Screen.Projects) { Nav.go(Screen.Projects) }
+                    "memory" -> NavRow(MEMORY_ICON, "Memory", selected = Nav.screen == Screen.Memory) { Nav.go(Screen.Memory) }
+                    "customize" -> NavRow(Ic.Sliders, "Customize") { Nav.settings = "capabilities" }
+                }
+            }
             Box {
                 NavRow(Ic.More, "More") { more = true }
                 Pop(more, { more = false }, Side.Right, minWidth = 240.dp) {
@@ -302,12 +311,12 @@ private fun Sidebar() {
         val list = if (prefs.mode == "code") hub.sessions.filter { !hub.isChat(it) } else hub.sessions.filter { hub.isChat(it) }
         val pinned = prefs.pinnedList.mapNotNull { hub.session(it) }.filter { it.time.archived == null }
         Column(Modifier.weight(1f)) {
-            if (pinned.isNotEmpty()) PinnedList(pinned)
+            if (pinned.isNotEmpty() && prefs.sidebarShows("pinned")) PinnedList(pinned)
             if (prefs.mode == "code") ProjectList(list.filter { it.id !in prefs.pinnedList }, Modifier.weight(1f))
             else ChatList(list.filter { it.id !in prefs.pinnedList }, Modifier.weight(1f))
         }
         Column(Modifier.padding(horizontal = M.listInset).padding(bottom = 8.dp)) {
-            ServerPill()
+            if (prefs.sidebarShows("server")) ServerPill()
             AccountRow()
         }
     }
@@ -412,7 +421,10 @@ private fun SessionRow(s: Session, modifier: Modifier = Modifier) {
             Modifier.fillMaxWidth().height(M.listRow).hoverTap(Oc.round(M.listRadius), selected) { Nav.go(Screen.Chat(s.id)) }.padding(start = 12.dp, end = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Txt(s.displayTitle, size = M.navText, maxLines = 1, modifier = Modifier.weight(1f), color = if (selected) c.text else c.text.copy(alpha = 0.92f))
+            // a new chat gets its name a moment after the first reply: it fades in instead of jumping
+            androidx.compose.animation.AnimatedContent(s.displayTitle, Modifier.weight(1f), label = "title", transitionSpec = {
+                (fadeIn(tween(220)) + androidx.compose.animation.slideInVertically(tween(220)) { it / 3 }) togetherWith fadeOut(tween(120))
+            }) { t -> Txt(t, size = M.navText, maxLines = 1, color = if (selected) c.text else c.text.copy(alpha = 0.92f)) }
             val done = s.id in Graph.hub.doneUnseen
             if (selected && done) androidx.compose.runtime.LaunchedEffect(Unit) { Graph.hub.doneUnseen.remove(s.id) }
             if (waiting) { Spacer(Modifier.width(8.dp)); Box(Modifier.size(7.dp).clip(CircleShape).background(c.warn)) }
@@ -549,25 +561,43 @@ private fun AccountRow() {
     }
 }
 
-/** A thin strip on top of the work area while the server is not up yet. */
+/**
+ * A card on top of the work area while the server isn't there for you: starting, failed (click to restart),
+ * the event stream dropped and not back within 2.5 s, the other computer unreachable, or no network at all.
+ */
 @Composable
 private fun ServerBanner(modifier: Modifier) {
     val st by Graph.runtime.state.collectAsStateCompat()
-    if (Graph.prefs.remoteUrl.isNotBlank()) return
+    val connected by Graph.events.connected.collectAsStateCompat()
+    val remote = Graph.prefs.remoteUrl.isNotBlank()
     val c = Oc.c
+    val online = rememberOnline()
+    var lost by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(connected, st, remote) {
+        lost = false
+        if (!connected && (remote || st is RuntimeState.Running)) { kotlinx.coroutines.delay(2500); lost = true }
+    }
     val inst = st as? RuntimeState.Installing
-    AnimatedVisibility(st !is RuntimeState.Running, modifier, enter = fadeIn(tween(140)), exit = fadeOut(tween(140))) {
+    val failed = !remote && st is RuntimeState.Failed
+    val show = !online || lost || (!remote && st !is RuntimeState.Running)
+    // keeps the last words while it fades out
+    var text by remember { mutableStateOf("") }
+    if (show) text = when {
+        !online -> "No internet. Replies go on when it's back."
+        remote && lost -> "Reconnecting to the other computer…"
+        lost -> "Reconnecting to OpenCode…"
+        else -> when (val s = st) {
+            is RuntimeState.Installing -> s.note
+            is RuntimeState.Failed -> if (s.reason.contains("restart", true)) s.reason else s.reason + "  Click to restart."
+            else -> "Starting OpenCode…"
+        }
+    }
+    AnimatedVisibility(show, modifier, enter = fadeIn(tween(140)), exit = fadeOut(tween(140))) {
         Column(
-            Modifier.width(360.dp).clip(Oc.round(12.dp)).background(c.surface).border(1.dp, c.border, Oc.round(12.dp)).padding(14.dp),
+            Modifier.width(380.dp).clip(Oc.round(12.dp)).background(c.surface).border(1.dp, c.border, Oc.round(12.dp))
+                .then(if (failed) Modifier.hoverTap(Oc.round(12.dp)) { Graph.runtime.restart() } else Modifier).padding(14.dp),
         ) {
-            Txt(
-                when (val s = st) {
-                    is RuntimeState.Installing -> s.note
-                    is RuntimeState.Failed -> s.reason
-                    else -> "Starting OpenCode…"
-                },
-                size = 14.sp,
-            )
+            Txt(text, size = 14.sp, color = if (failed) c.danger else if (!online) c.textDim else c.text)
             if (inst != null && inst.share >= 0) {
                 Spacer(Modifier.height(10.dp))
                 Box(Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(c.border)) {
@@ -576,6 +606,25 @@ private fun ServerBanner(modifier: Modifier) {
             }
         }
     }
+}
+
+/** Whether this computer has any network besides itself; looked at every few seconds (there's no event for it here). */
+@Composable
+private fun rememberOnline(): Boolean {
+    var online by remember { mutableStateOf(true) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            online = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    java.net.NetworkInterface.getNetworkInterfaces().toList().any { n ->
+                        n.isUp && !n.isLoopback && !n.isVirtual && n.inetAddresses.toList().any { !it.isLinkLocalAddress && !it.isLoopbackAddress }
+                    }
+                }.getOrDefault(true)
+            }
+            kotlinx.coroutines.delay(3000)
+        }
+    }
+    return online
 }
 
 fun openFolder(dir: String) {

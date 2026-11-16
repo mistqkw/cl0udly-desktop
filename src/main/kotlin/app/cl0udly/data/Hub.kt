@@ -165,9 +165,9 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
                 if (t == "idle") statuses.remove(id) else statuses[id] = t
                 if (t == "retry") retryNote[id] = st.str("message") ?: "Retrying…" else retryNote.remove(id)
                 if (t == "retry" && st.str("message")?.contains("Free usage", true) == true && prefs.providerId != FreeModels.POLLINATIONS_ID) fallToPollinations(id)
-                if (t == "idle" && was != null) finished.tryEmit(id)
+                if (t == "idle" && was != null) { reacted(id); finished.tryEmit(id) }
             }
-            "session.idle" -> p.str("sessionID")?.let { id -> if (statuses.remove(id) != null) { finished.tryEmit(id); Sounds.play(Sounds.S.Done); Limits.checkSpending() } }
+            "session.idle" -> p.str("sessionID")?.let { id -> if (statuses.remove(id) != null) { reacted(id); finished.tryEmit(id); Sounds.play(Sounds.S.Done); Limits.checkSpending() } }
             "permission.asked" -> parsePermission(p).let { r ->
                 // Auto mode: the agent goes on by itself, like Claude's Auto
                 // a helper model is the user's call even in Auto (always-allowed ones never ask)
@@ -185,6 +185,7 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
                     toasts.tryEmit(msg)
                     Sounds.play(Sounds.S.Error)
                     if (prefs.notifyErrors) Desktop.notify("cl0udly ran into an error", msg)
+                    app.cl0udly.ui.cloud.MascotSignals.outcome = app.cl0udly.ui.cloud.Outcome(ok = false, sessionId = p.str("sessionID"))
                 }
             }
             else -> {
@@ -195,6 +196,13 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
     }
 
     private var switching = false
+
+    /** A reply ended: the mascot is glad, unless that same reply just failed (an error also ends with "idle"). */
+    private fun reacted(id: String) {
+        val was = app.cl0udly.ui.cloud.MascotSignals.outcome
+        if (!(was != null && !was.ok && was.sessionId == id && System.currentTimeMillis() - was.at < 3000))
+            app.cl0udly.ui.cloud.MascotSignals.outcome = app.cl0udly.ui.cloud.Outcome(ok = true, sessionId = id)
+    }
 
     /** Zen's free tier is capped: switch to Pollinations and send the last message again (like the phone). */
     private fun fallToPollinations(id: String) {
@@ -304,9 +312,37 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
         runCatching { api.renameSession(id, all[id]?.directory, title) }.onFailure { toasts.tryEmit(it.message ?: "Could not rename") }
     }
 
-    fun delete(id: String) = scope.launch {
-        runCatching { api.deleteSession(id, all[id]?.directory); all.remove(id); chats.remove(id) }
-            .onFailure { toasts.tryEmit(it.message ?: "Could not delete") }
+    /** Something that can be taken back for a few seconds: the bar at the bottom shows [text] and "Undo". */
+    class Undo(val text: String, val undo: () -> Unit)
+    var undo by androidx.compose.runtime.mutableStateOf<Undo?>(null)
+
+    /**
+     * The chat disappears at once and "Undo" brings it back for four seconds; only then is it removed on
+     * the server, so a slip of the mouse loses nothing (as on the phone).
+     */
+    fun delete(id: String) {
+        val s = all.remove(id) ?: return
+        var undone = false
+        val u = Undo("Chat deleted") { undone = true; all[id] = s }
+        undo = u
+        scope.launch {
+            kotlinx.coroutines.delay(4200)
+            if (undo === u) undo = null
+            if (undone) return@launch
+            runCatching { api.deleteSession(id, s.directory); chats.remove(id) }
+                .onFailure { all[id] = s; toasts.tryEmit(it.message ?: "Could not delete") }
+        }
+    }
+
+    /** Sends your last message again in place of the failed reply. */
+    fun retryLast(id: String) = scope.launch {
+        val c = chat(id)
+        val last = c.messages.lastOrNull { it.info.isUser } ?: return@launch
+        val text = last.parts.filter { it.type == "text" && it.raw.str("synthetic") != "true" }.joinToString("\n") { it.text }
+        if (text.isBlank()) return@launch
+        runCatching { api.revert(id, all[id]?.directory, last.id) }
+        c.truncateFrom(last.id)
+        send(id, text)
     }
 
     fun replyPermission(r: PermissionReq, reply: String) = scope.launch {

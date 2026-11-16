@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -76,6 +77,8 @@ import app.cl0udly.ui.kit.Txt
 import app.cl0udly.ui.kit.hoverTap
 import app.cl0udly.ui.theme.Oc
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import androidx.compose.runtime.snapshotFlow
 
 /** What the input is doing right now: the mascot looks down at it while someone types. */
 object ComposerState {
@@ -101,9 +104,17 @@ fun Composer(
     directory: String? = null,
     sessionId: String? = null,
     below: @Composable (() -> Unit)? = null,
+    /** The chat whose unsent text is kept: it comes back when you return, even after a restart. */
+    draftKey: String? = null,
+    /** Over the chat, which shows a little through it. */
+    floating: Boolean = false,
 ) {
     val c = Oc.c
-    var value by remember { mutableStateOf(TextFieldValue("")) }
+    var value by remember(draftKey) { mutableStateOf(draftKey?.let { Graph.prefs.draft(it) }.orEmpty().let { TextFieldValue(it, TextRange(it.length)) }) }
+    if (draftKey != null) {
+        LaunchedEffect(draftKey) { snapshotFlow { value.text }.collectLatest { delay(300); Graph.prefs.setDraft(draftKey, it) } }
+        androidx.compose.runtime.DisposableEffect(draftKey) { onDispose { Graph.prefs.setDraft(draftKey, value.text) } }
+    }
     var focused by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     val border by animateColorAsState(if (focused) c.textDim.copy(alpha = 0.6f) else c.border, tween(120), label = "border")
@@ -179,7 +190,8 @@ fun Composer(
     androidx.compose.runtime.DisposableEffect(Unit) { onDispose { voice.cancel() } }
 
     val field = @Composable { mod: Modifier ->
-        Box(mod, contentAlignment = Alignment.CenterStart) {
+        // grows line by line instead of jumping; past eight lines it scrolls inside
+        Box(mod.animateContentSize(tween(130)), contentAlignment = Alignment.CenterStart) {
             if (value.text.isEmpty()) Txt(
                 when (voice.state) { app.cl0udly.data.Voice.State.Listening -> "Listening…"; app.cl0udly.data.Voice.State.Transcribing -> "Writing it down…"; else -> placeholder },
                 size = M.body, color = c.textDim, maxLines = 1, italic = listening,
@@ -210,11 +222,13 @@ fun Composer(
                     },
                 textStyle = TextStyle(color = c.text, fontSize = M.body, lineHeight = M.bodyLine, fontFamily = Oc.body),
                 cursorBrush = SolidColor(c.accent),
-                maxLines = 12,
+                maxLines = 8,
             )
         }
     }
     val shape = Oc.round(if (big) 20.dp else M.composerRadius)
+    // the mic stays put: you can add a few words by voice to what's already typed
+    val micShown = true
     Column(modifier) {
         // "/" and "@" suggestions sit right above the field
         Box(Modifier.fillMaxWidth()) {
@@ -235,13 +249,12 @@ fun Composer(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     PlusMenu(::insert, ::attach)
                     Spacer(Modifier.weight(1f))
-                    MicButton(voice.state, ::toggleVoice)
-                    Spacer(Modifier.width(6.dp))
+                    MicSlot(micShown) { MicButton(voice.state, ::toggleVoice); Spacer(Modifier.width(6.dp)) }
                     SendButton(busy, value.text.isNotBlank() || Draft.files.isNotEmpty(), ::send, onStop, listening, ::voiceSend)
                 }
             }
         } else {
-            Column(Modifier.fillMaxWidth().clip(shape).background(c.surface).border(1.dp, border, shape).animateContentSize(tween(130))) {
+            Column(Modifier.fillMaxWidth().clip(shape).background(if (floating) c.surface.copy(alpha = 0.88f) else c.surface).border(1.dp, border, shape).animateContentSize(tween(130))) {
             if (Draft.files.isNotEmpty()) Box(Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp)) { AttachRow() }
             Row(
                 Modifier.fillMaxWidth().heightIn(min = M.composerHeight).padding(start = 12.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
@@ -252,8 +265,7 @@ fun Composer(
                 field(Modifier.weight(1f))
                 Spacer(Modifier.width(10.dp))
                 SendButton(busy, value.text.isNotBlank() || Draft.files.isNotEmpty(), ::send, onStop, listening, ::voiceSend)
-                Spacer(Modifier.width(6.dp))
-                MicButton(voice.state, ::toggleVoice)
+                MicSlot(micShown) { Spacer(Modifier.width(6.dp)); MicButton(voice.state, ::toggleVoice) }
             }
             }
         }
@@ -280,11 +292,38 @@ private fun SendButton(busy: Boolean, ready: Boolean, onSend: () -> Unit, onStop
         return
     }
     val bg by animateColorAsState(if (busy || ready) c.text else c.surfaceHigh, tween(120), label = "send")
-    Box(Modifier.size(34.dp).clip(Oc.pill).background(bg).hoverTap(Oc.pill) { if (busy && !ready) onStop() else onSend() }, contentAlignment = Alignment.Center) {
-        AnimatedContent(busy && !ready, transitionSpec = { (fadeIn(tween(110)) + scaleIn(tween(110), 0.7f)) togetherWith fadeOut(tween(80)) }, label = "sendIcon") { stop ->
+    // while the answer comes, a thin arc runs around the stop square (a line, not a pulse)
+    val spin = if (busy && !ready) androidx.compose.animation.core.rememberInfiniteTransition(label = "spin")
+        .animateFloat(0f, 360f, androidx.compose.animation.core.infiniteRepeatable(tween(1100, easing = androidx.compose.animation.core.LinearEasing)), label = "spinA") else null
+    Box(
+        Modifier.size(34.dp).clip(Oc.pill).background(bg)
+            .drawBehind {
+                val a = spin?.value ?: return@drawBehind
+                val sw = 1.5.dp.toPx(); val inset = 3.dp.toPx()
+                drawArc(c.bg.copy(alpha = 0.55f), a, 80f, false, Offset(inset, inset), Size(size.width - inset * 2, size.height - inset * 2), style = Stroke(sw, cap = StrokeCap.Round))
+            }
+            .hoverTap(Oc.pill) { if (busy && !ready) onStop() else onSend() },
+        contentAlignment = Alignment.Center,
+    ) {
+        AnimatedContent(busy && !ready, transitionSpec = {
+            // the arrow comes up from below, the stop square grows in place
+            val enter = if (targetState) scaleIn(tween(130), 0.6f) + fadeIn(tween(100))
+            else androidx.compose.animation.slideInVertically(tween(130)) { it / 2 } + fadeIn(tween(100))
+            enter togetherWith (fadeOut(tween(70)) + androidx.compose.animation.scaleOut(tween(70), 0.8f))
+        }, label = "sendIcon") { stop ->
             if (stop) Icon(Ic.Stop, 14.dp, c.bg) else Icon(Ic.ArrowUp, 18.dp, if (ready) c.bg else c.textDim, stroke = 2f)
         }
     }
+}
+
+/** Folds the mic sideways when there's something to send. */
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.MicSlot(shown: Boolean, content: @Composable () -> Unit) {
+    androidx.compose.animation.AnimatedVisibility(
+        shown,
+        enter = fadeIn(tween(120)) + androidx.compose.animation.expandHorizontally(tween(140)),
+        exit = fadeOut(tween(90)) + androidx.compose.animation.shrinkHorizontally(tween(140)),
+    ) { Row(verticalAlignment = Alignment.CenterVertically) { content() } }
 }
 
 /** The microphone: tap to talk, tap again to put the words in the field (Ctrl+Shift+M). */

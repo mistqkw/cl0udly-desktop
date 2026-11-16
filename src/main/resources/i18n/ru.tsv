@@ -653,3 +653,11 @@ Sub-agents work as a team: add them in the model picker, they know the whole con
 Memory as a graph in the sidebar, plus import and export (a memory zip from Claude works too)	Память в виде графа в боковой панели, плюс импорт и экспорт (подходит и архив памяти из Claude)
 OpenCode updates itself, and you can go back to the previous version in Settings → Server	OpenCode обновляется сам, а в «Настройки → Сервер» можно вернуть прошлую версию
 Russian and English: pick it in Settings → General	Русский и английский: выбирается в «Настройки → Основное»
+New look: a night sky with pixel clouds, and a new launch screen	Новый вид: ночное небо с пиксельными облаками и новая заставка
+Search (Ctrl+K) finds words inside messages and in memory	Поиск (Ctrl+K) находит слова внутри сообщений и в памяти
+A speaker under each reply reads it aloud	Динамик под ответом читает его вслух
+A card says when the server or the internet is gone; a stopped server restarts on a click	Карточка сообщает, если пропал сервер или интернет; упавший сервер перезапускается по клику
+The cloud reacts when a reply is done or fails	Облачко реагирует, когда ответ готов или не получился
+The sidebar rows can be reordered in Settings → Appearance	Порядок пунктов боковой панели меняется в Настройки → Appearance
+Code in replies is highlighted, with line numbers; a deleted chat can be brought back	Код в ответах подсвечен, с номерами строк; удалённый чат можно вернуть
+Fixed: the "OK" error with GitHub Copilot, broken replies from GPT-OSS, the chat jumping down when you scroll up	Исправлено: ошибка «OK» с GitHub Copilot, сломанные ответы GPT-OSS, чат прыгал вниз при прокрутке вверх

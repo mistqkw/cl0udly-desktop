@@ -269,6 +269,28 @@ private fun Appearance() {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Looks.all.forEach { l -> LookCard(l, prefs.edition == l.id) { prefs.edition = l.id } }
     }
+    Spacer(Modifier.height(28.dp))
+    Txt("Sidebar", size = 16.sp, weight = FontWeight.Medium)
+    Spacer(Modifier.height(4.dp))
+    Txt("What the sidebar shows and in what order. New chat and More always stay.", size = 13.sp, color = Oc.c.textDim)
+    Spacer(Modifier.height(10.dp))
+    val names = mapOf("search" to "Search", "projects" to "Projects", "memory" to "Memory", "customize" to "Customize", "pinned" to "Pinned chats", "server" to "Server status")
+    // the top rows can move; pinned chats and the server status keep their places lower down
+    val order = prefs.sidebarRows
+    val rows = order + listOf("pinned", "server")
+    rows.forEachIndexed { i, k ->
+        SettingRow(names[k] ?: k, last = i == rows.lastIndex) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (k in order) {
+                    val at = order.indexOf(k)
+                    IconButton(Ic.ArrowUp, { prefs.moveSidebar(k, -1) }, size = 28.dp, icon = 15.dp, tint = if (at > 0) Oc.c.textDim else Oc.c.border)
+                    IconButton(Ic.ArrowDown, { prefs.moveSidebar(k, 1) }, size = 28.dp, icon = 15.dp, tint = if (at < order.lastIndex) Oc.c.textDim else Oc.c.border)
+                    Spacer(Modifier.width(10.dp))
+                }
+                Toggle(prefs.sidebarShows(k)) { prefs.toggleSidebar(k) }
+            }
+        }
+    }
 }
 
 /** A tiny window in the look's colors: sidebar, a bubble, a reply and the input. */
