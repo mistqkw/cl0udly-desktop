@@ -1,6 +1,8 @@
 package app.cl0udly.data
 
 import app.cl0udly.Graph
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -23,7 +25,7 @@ object FreeModels {
                 putJsonObject(POLLINATIONS_ID) {
                     put("name", "Pollinations (no account)")
                     put("npm", "@ai-sdk/openai-compatible")
-                    putJsonObject("options") { put("baseURL", "https://text.pollinations.ai/openai"); put("apiKey", "anonymous") }
+                    putJsonObject("options") { put("baseURL", base()); put("apiKey", "anonymous") }
                     putJsonObject("models") {
                         putJsonObject(POLLINATIONS_DEFAULT) {
                             put("name", "GPT-OSS 20B"); put("tool_call", true); put("reasoning", true); put("attachment", false)
@@ -37,6 +39,19 @@ object FreeModels {
         runCatching { Graph.api.disposeAll() }
         Graph.prefs.providerId = POLLINATIONS_ID; Graph.prefs.modelId = POLLINATIONS_DEFAULT; Graph.prefs.variant = ""
         Graph.hub.loadModels()
+    }
+
+    /** Through ToolCallFix on this computer; another computer's server can't reach our localhost. */
+    private fun base() = if (Graph.prefs.remoteUrl.isBlank()) ToolCallFix.baseUrl(POLLINATIONS_ID) else ToolCallFix.upstream.getValue(POLLINATIONS_ID)
+
+    /** Pollinations added before the proxy points straight at it: move it over. */
+    suspend fun routeThroughFix() {
+        val opts = (Graph.api.config()["provider"] as? JsonObject)?.get(POLLINATIONS_ID)?.let { it as? JsonObject }?.get("options") as? JsonObject ?: return
+        if ((opts["baseURL"] as? JsonPrimitive)?.content == base()) return
+        Graph.api.patchGlobalConfig(buildJsonObject {
+            putJsonObject("provider") { putJsonObject(POLLINATIONS_ID) { putJsonObject("options") { put("baseURL", base()); put("apiKey", "anonymous") } } }
+        })
+        runCatching { Graph.api.disposeAll() }
     }
 
 }

@@ -26,6 +26,7 @@ object Graph {
     val ocUpdater = app.cl0udly.runtime.OcUpdater(prefs, runtime, scope)
 
     fun start() {
+        app.cl0udly.data.ToolCallFix.start()
         if (prefs.remoteUrl.isBlank()) runtime.start()
         events.start(scope)
         hub.start()

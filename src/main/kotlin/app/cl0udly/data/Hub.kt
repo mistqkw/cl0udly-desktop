@@ -92,6 +92,8 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
         scope.launch { events.generation.collect { if (it > 0) reload() } }
     }
 
+    private var routed = false
+
     suspend fun reload() {
         runCatching {
             // OpenCode answers per project: without a folder it only knows the plain chats (and folders
@@ -108,6 +110,7 @@ class Hub(private val api: OpenCodeApi, private val events: EventHub, private va
             }
             chats.values.forEach { it.load() }
         }.onFailure { toasts.tryEmit(it.message ?: "Could not load sessions") }
+        if (!routed) routed = runCatching { FreeModels.routeThroughFix() }.isSuccess
         loadModels()
         loaded = true
     }
